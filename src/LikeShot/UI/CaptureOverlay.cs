@@ -24,6 +24,7 @@ public sealed class CaptureOverlay : Window
     private readonly ToolbarStrip _toolbar;
     private TextBox? _textEditor;
     private Point _textAnchor;
+    private TextAnnotation? _editingText;
 
     public CaptureOverlay(CaptureSession session, Display display)
     {
@@ -58,6 +59,7 @@ public sealed class CaptureOverlay : Window
 
         session.Changed += OnSessionChanged;
         session.TextPlacementRequested += PlaceTextEditor;
+        session.TextEditRequested += EditTextEditor;
 
         MouseLeftButtonDown += OnMouseDown;
         MouseRightButtonDown += OnRightDown;
@@ -207,6 +209,7 @@ public sealed class CaptureOverlay : Window
     private void UpdateCursor(Point physical)
     {
         if (!_session.HasSelection) { Cursor = Cursors.Cross; return; }
+        if (_session.OverText(physical)) { Cursor = Cursors.Hand; return; }
         if (_session.Tool != ToolKind.None) { Cursor = _session.Tool == ToolKind.Text ? Cursors.IBeam : Cursors.Cross; return; }
 
         var r = _session.FinalRect();
@@ -236,20 +239,33 @@ public sealed class CaptureOverlay : Window
     private void PlaceTextEditor(Point physical)
     {
         if (!_display.Contains((int)physical.X, (int)physical.Y)) return;
+        OpenTextEditor(physical, "", _session.Color, _session.FontSize, editTarget: null);
+    }
+
+    /// <summary>双击已有文字：原字先藏起来，编辑框里垫着旧内容，Enter 替换、Esc 不动。</summary>
+    private void EditTextEditor(TextAnnotation target)
+    {
+        OpenTextEditor(target.Position, target.Text, target.Color, target.FontSize, editTarget: target);
+    }
+
+    private void OpenTextEditor(Point physical, string initial, Color color, int fontSizePx, TextAnnotation? editTarget)
+    {
         CommitTextEditor();
 
         var dip = _display.ToDip((int)physical.X, (int)physical.Y);
         _textAnchor = physical;
+        _editingText = editTarget;
+        if (_editingText != null) _editingText.Hidden = true;
         _textEditor = new TextBox
         {
-            Text = "",
+            Text = initial,
             AcceptsReturn = true,
             Background = new SolidColorBrush(Color.FromArgb(0x40, 0, 0, 0)),
-            Foreground = new SolidColorBrush(_session.Color),
-            BorderBrush = new SolidColorBrush(_session.Color),
+            Foreground = new SolidColorBrush(color),
+            BorderBrush = new SolidColorBrush(color),
             BorderThickness = new Thickness(1, 1, 0, 0),
             FontFamily = new FontFamily("Microsoft YaHei, Segoe UI"),
-            FontSize = _session.FontSize / _display.Scale,
+            FontSize = fontSizePx / _display.Scale,
             Padding = new Thickness(0),
             MinWidth = 24,
             MaxWidth = Math.Max(24, _display.Bounds.Width / _display.Scale - dip.X - 8)
@@ -265,8 +281,9 @@ public sealed class CaptureOverlay : Window
         };
         _chrome.Children.Add(_textEditor);
         Canvas.SetLeft(_textEditor, dip.X);
-        Canvas.SetTop(_textEditor, dip.Y - _session.FontSize / _display.Scale * 0.12);
+        Canvas.SetTop(_textEditor, dip.Y - fontSizePx / _display.Scale * 0.12);
         _textEditor.Focus();
+        _textEditor.SelectAll();   // 双击改字：进来就全选，直接打字就替换
     }
 
     private void CommitTextEditor(bool discard = false)
@@ -275,7 +292,17 @@ public sealed class CaptureOverlay : Window
         var text = _textEditor.Text.TrimEnd('\r', '\n');
         _chrome.Children.Remove(_textEditor);
         _textEditor = null;
-        if (!discard && text.Length > 0) _session.AddText(text, _textAnchor);
+        var target = _editingText;
+        _editingText = null;
+        if (target != null)
+        {
+            target.Hidden = false;   // 不管改没改成，旧字都放回来
+            if (!discard && text.Length > 0) _session.UpdateText(target, text);
+        }
+        else if (!discard && text.Length > 0)
+        {
+            _session.AddText(text, _textAnchor);
+        }
         _session.SetTool(ToolKind.None);
     }
 

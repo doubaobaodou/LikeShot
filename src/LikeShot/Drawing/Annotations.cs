@@ -24,6 +24,9 @@ public abstract class Annotation
     public Color Color { get; set; } = Colors.Red;
     public int StrokeWidth { get; set; } = 4;
 
+    /// <summary>文字进编辑态时先把旧字藏起来，不然编辑框底下还垫着一份。</summary>
+    public bool Hidden { get; set; }
+
     protected Annotation() { }
 
     /// <summary>子类主构造函数收到的颜色/粗细必须走这里落到属性上，
@@ -247,6 +250,11 @@ public sealed class AnnotationLayer
         Changed?.Invoke();
     }
 
+    public void Remove(Annotation item)
+    {
+        if (_items.Remove(item)) Changed?.Invoke();
+    }
+
     public void UndoLast()
     {
         if (_items.Count == 0) return;
@@ -265,6 +273,7 @@ public sealed class AnnotationLayer
 
     public void DrawAll(DrawingContext dc, RenderContext ctx)
     {
-        foreach (var item in _items) item.Draw(dc, ctx);
+        foreach (var item in _items)
+            if (!item.Hidden) item.Draw(dc, ctx);
     }
 }

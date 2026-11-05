@@ -62,6 +62,7 @@ public sealed class CaptureSession
     public event Action? ExitRequested;
     public event Action? LongModeRequested;
     public event Action<Point>? TextPlacementRequested;
+    public event Action<TextAnnotation>? TextEditRequested;
 
     private Point _dragStart;
     private Int32Rect _dragOriginal;
@@ -70,8 +71,10 @@ public sealed class CaptureSession
     private Annotation? _live;
     private Point? _polygonSeed;
     private Point _shapeAnchor;
+    private TextAnnotation? _movingText;
+    private Vector _textMoveOffset;
 
-    private enum DragMode { None, NewRect, MoveRect, ResizeRect, Stroke, SizingShape, Polygon }
+    private enum DragMode { None, NewRect, MoveRect, ResizeRect, Stroke, SizingShape, Polygon, MovingText }
 
     public int StrokeWidth => (int)Math.Round(WidthDp * UiScale);
     public int FontSize => Theme.FontSizesAt(UiScale)[Math.Clamp(FontIndex, 0, 2)];
@@ -158,6 +161,20 @@ public sealed class CaptureSession
             return;
         }
 
+        // 点在已放置的文字上就拖动它——不管当前是什么画具，QQ 也这样；
+        // 想在文字旁边新建，点文字外面就行。
+        if (HasSelection && Inside(physical))
+        {
+            var hit = HitText(physical);
+            if (hit != null)
+            {
+                _movingText = hit;
+                _textMoveOffset = physical - hit.Position;
+                _drag = DragMode.MovingText;
+                return;
+            }
+        }
+
         if (HasSelection && Tool != ToolKind.None && Inside(physical))
         {
             BeginAnnotation(physical);
@@ -227,6 +244,10 @@ public sealed class CaptureSession
                 SizeLive(physical);
                 break;
 
+            case DragMode.MovingText:
+                if (_movingText != null) _movingText.Position = physical - _textMoveOffset;
+                break;
+
             default:
                 if (Phase == CapturePhase.Choosing)
                 {
@@ -268,6 +289,10 @@ public sealed class CaptureSession
                 RebuildMosaics();
                 break;
 
+            case DragMode.MovingText:
+                _movingText = null;
+                break;
+
             case DragMode.Stroke:
             case DragMode.SizingShape:
                 _live = null;
@@ -280,7 +305,18 @@ public sealed class CaptureSession
 
     public void DoubleClick(Point physical)
     {
-        if (Tool != ToolKind.None || !HasSelection || !Inside(physical)) return;
+        if (!HasSelection || !Inside(physical)) return;
+
+        // 双击文字 = 进编辑态；双击空白 = 完成复制。前者优先。
+        var hit = HitText(physical);
+        if (hit != null)
+        {
+            _drag = DragMode.None;      // 双击的第二次按下可能还挂着拖动
+            _movingText = null;
+            TextEditRequested?.Invoke(hit);
+            return;
+        }
+        if (Tool != ToolKind.None) return;
         FinishRequested?.Invoke(new FinishRequest(CopyMode.Clipboard));
     }
 
@@ -416,6 +452,14 @@ public sealed class CaptureSession
         Changed?.Invoke();
     }
 
+    /// <summary>双击已有文字进编辑态：替换文本内容，位置样式不动。</summary>
+    public void UpdateText(TextAnnotation target, string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        target.Text = text;
+        Changed?.Invoke();
+    }
+
     // ---------- 结果 ----------
 
     public BitmapSource RenderResult()
@@ -522,6 +566,33 @@ public sealed class CaptureSession
                 break;
         }
     }
+
+    /// <summary>命中检测：点落在了哪条已放置的文字上（从最上层往下找），没有就 null。</summary>
+    public TextAnnotation? HitText(Point p)
+    {
+        for (int i = Layer.Items.Count - 1; i >= 0; i--)
+        {
+            if (Layer.Items[i] is not TextAnnotation t || string.IsNullOrEmpty(t.Text)) continue;
+            var formatted = new FormattedText(
+                t.Text,
+                System.Globalization.CultureInfo.CurrentCulture,
+                FlowDirection.LeftToRight,
+                new Typeface(new FontFamily("Microsoft YaHei, PingFang SC, Segoe UI"),
+                    FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
+                t.FontSize,
+                Theme.Brush(Theme.LoupeText),
+                1);
+            // 和绘制时一样留 4px 右边距，命中框略放宽 3px 手感更好。
+            var bounds = new Rect(t.Position.X - 3, t.Position.Y - 3,
+                Math.Min(formatted.Width, Selection.X + Selection.Width - t.Position.X) + 9,
+                formatted.Height + 6);
+            if (bounds.Contains(p)) return t;
+        }
+        return null;
+    }
+
+    /// <summary>鼠标悬停在文字上时给个抓手光标。</summary>
+    public bool OverText(Point p) => HasSelection && HitText(p) != null;
 
     private int HitHandle(Point p)
     {
