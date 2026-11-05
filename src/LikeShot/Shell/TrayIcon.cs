@@ -38,23 +38,25 @@ public sealed class TrayIcon : IDisposable
     {
         var menu = new WF.ContextMenuStrip();
 
-        var capture = new WF.ToolStripMenuItem($"截图  {_config.CaptureChord}") { Font = new Font(menu.Font, System.Drawing.FontStyle.Bold) };
+        var capture = new WF.ToolStripMenuItem { Font = new Font(menu.Font, System.Drawing.FontStyle.Bold) };
         capture.Click += (_, _) => BeginCapture();
         menu.Items.Add(capture);
+
+        menu.Items.Add(new WF.ToolStripSeparator());
+
+        var settings = new WF.ToolStripMenuItem("设置…");
+        settings.Click += (_, _) => Application.Current.Dispatcher.Invoke(() => App.OpenSettings());
+        menu.Items.Add(settings);
 
         var folder = new WF.ToolStripMenuItem("打开保存目录");
         folder.Click += (_, _) => OpenFolder();
         menu.Items.Add(folder);
 
-        var autostart = new WF.ToolStripMenuItem("开机自动启动")
-        {
-            Checked = _config.RunOnStartup,
-            CheckOnClick = true
-        };
+        var autostart = new WF.ToolStripMenuItem("开机自动启动") { CheckOnClick = true };
         autostart.Click += (_, _) =>
         {
+            if (!AutoStart.Set(autostart.Checked)) autostart.Checked = AutoStart.IsEnabled();
             _config.RunOnStartup = autostart.Checked;
-            ApplyAutoStart(_config.RunOnStartup);
             AppConfig.Save(_config);
         };
         menu.Items.Add(autostart);
@@ -63,11 +65,19 @@ public sealed class TrayIcon : IDisposable
 
         var status = new WF.ToolStripMenuItem(StatusLine()) { Enabled = false };
         menu.Items.Add(status);
-        menu.Opening += (_, _) => status.Text = StatusLine();
 
         var exit = new WF.ToolStripMenuItem("退出 LikeShot");
         exit.Click += (_, _) => Application.Current.Dispatcher.Invoke(() => Application.Current.Shutdown());
         menu.Items.Add(exit);
+
+        // 热键和自启状态都可能被设置窗口改掉，菜单每次展开都按当前配置重读一遍，
+        // 免得两处显示打架。
+        menu.Opening += (_, _) =>
+        {
+            capture.Text = $"截图  {_config.CaptureChord}";
+            status.Text = StatusLine();
+            autostart.Checked = AutoStart.IsEnabled();
+        };
 
         return menu;
     }
@@ -92,14 +102,6 @@ public sealed class TrayIcon : IDisposable
     public void NotifySaved(string path)
     {
         _icon.ShowBalloonTip(1200, "截图已保存", Path.GetFileName(path), WF.ToolTipIcon.Info);
-    }
-
-    private static void ApplyAutoStart(bool enable)
-    {
-        using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
-        if (key == null) return;
-        if (enable) key.SetValue("LikeShot", $"\"{Environment.ProcessPath}\"");
-        else key.DeleteValue("LikeShot", false);
     }
 
     private static Icon BuildIcon()

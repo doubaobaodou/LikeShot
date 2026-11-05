@@ -332,7 +332,12 @@ public sealed class PinWindow : Window
         Exporter.CopyImage(image);
     }
 
-    public void SaveToDisk() => Exporter.SaveDialog(_session.RenderResult(), App.Config);
+    public void SaveToDisk()
+    {
+        var image = _session.RenderResult();
+        var saved = Exporter.SaveDialog(image, App.Config);
+        if (saved != null && App.Config.CopyAfterSave) Exporter.CopyImage(image);
+    }
 
     /// <summary>把标注按当前窗口的拉伸比例画出来，X/Y 分开，拖过边之后也不会错位。</summary>
     private sealed class PinSurface : FrameworkElement

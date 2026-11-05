@@ -306,17 +306,112 @@ public static class SelfTest
         }
     }
 
-    /// <summary>用 keybd_event 打一次真组合键：修饰键按住不放，最后敲 F9，再逆序松开。</summary>
-    private static void PressChord()
+    /// <summary>用 keybd_event 打一次真组合键：修饰键按住不放，最后敲主键，再逆序松开。</summary>
+    private static void PressChord(byte mainKey = 0x78)
     {
-        const byte Ctrl = 0x11, Alt = 0x12, Shift = 0x10, F9 = 0x78;
+        const byte Ctrl = 0x11, Alt = 0x12, Shift = 0x10;
         void Down(byte vk) => LikeShot.Native.Win32.keybd_event(vk, 0, 0, UIntPtr.Zero);
         void Up(byte vk) => LikeShot.Native.Win32.keybd_event(vk, 0, LikeShot.Native.Win32.KEYEVENTF_KEYUP, UIntPtr.Zero);
 
-        Down(Ctrl); Down(Alt); Down(Shift); Down(F9);
+        Down(Ctrl); Down(Alt); Down(Shift); Down(mainKey);
         Thread.Sleep(60);
-        Up(F9); Up(Shift); Up(Alt); Up(Ctrl);
+        Up(mainKey); Up(Shift); Up(Alt); Up(Ctrl);
     }
+
+    /// <summary>
+    /// 设置窗口实跑：不靠点鼠标，验三件事——
+    /// 捕获框能产出的每个键位都能被 Chord.Parse 认回去；「应用」真的落到配置和磁盘；
+    /// 应用之后不用重启，注入新组合键就该由我们的截图层接住。
+    /// 结束前把配置原样写回去，不把他机器上的设置留在测试状态。
+    /// </summary>
+    public static async void SettingsRun(CaptureController controller, Action exit)
+    {
+        var log = new StringBuilder();
+        string dir = Path.Combine(Path.GetTempPath(), "likeshot-selftest");
+        Directory.CreateDirectory(dir);
+        const string testChord = "Ctrl+Alt+Shift+F10";
+        const byte F10 = 0x79;
+
+        string realChord = App.Config.CaptureChord;
+        string realFormat = App.Config.SaveFormat;
+        int realPoll = App.Config.LongCapturePollMilliseconds;
+        int realNotches = App.Config.LongCaptureScrollNotches;
+        var realYield = App.Config.YieldToProcesses.ToList();
+        string configPath = App.ConfigPath;
+        byte[]? backup = File.Exists(configPath) ? File.ReadAllBytes(configPath) : null;
+
+        LikeShot.UI.SettingsWindow? win = null;
+        try
+        {
+            // 1) 键位映射回环
+            var tokens = new List<string>();
+            for (int k = (int)System.Windows.Input.Key.A; k <= (int)System.Windows.Input.Key.Z; k++) AddToken((System.Windows.Input.Key)k);
+            for (int k = (int)System.Windows.Input.Key.D0; k <= (int)System.Windows.Input.Key.D9; k++) AddToken((System.Windows.Input.Key)k);
+            for (int k = (int)System.Windows.Input.Key.F1; k <= (int)System.Windows.Input.Key.F24; k++) AddToken((System.Windows.Input.Key)k);
+            foreach (var k in new[] { System.Windows.Input.Key.Space, System.Windows.Input.Key.Enter, System.Windows.Input.Key.Tab,
+                System.Windows.Input.Key.PrintScreen, System.Windows.Input.Key.Insert, System.Windows.Input.Key.Delete,
+                System.Windows.Input.Key.Home, System.Windows.Input.Key.End, System.Windows.Input.Key.PageUp,
+                System.Windows.Input.Key.PageDown, System.Windows.Input.Key.Left, System.Windows.Input.Key.Up,
+                System.Windows.Input.Key.Right, System.Windows.Input.Key.Down }) AddToken(k);
+            void AddToken(System.Windows.Input.Key key)
+            {
+                var token = LikeShot.UI.ChordBox.KeyToken(key);
+                if (token != null) tokens.Add(token);
+            }
+            int unparsable = tokens.Count(t =>
+            {
+                try { LikeShot.Hotkeys.Chord.Parse("Ctrl+" + t); return false; } catch { return true; }
+            });
+            log.AppendLine($"键位映射：捕获框支持 {tokens.Count} 个主键，Ctrl+主键 解析失败={unparsable}（应为 0）");
+
+            // 2) 应用
+            win = new LikeShot.UI.SettingsWindow(App.Config);
+            log.AppendLine($"打开时状态「{win.StatusForTest}」 提示「{win.ChordHintForTest}」");
+            win.ChordForTest = testChord;
+            win.YieldForTest = "__NoSuchProcessForTest";
+            win.PickForTest("bmp", 120, 2);
+            bool applied = win.Apply();
+            log.AppendLine($"应用返回={applied} 状态「{win.StatusForTest}」 提示「{win.ChordHintForTest}」");
+            log.AppendLine($"内存配置：热键={App.Config.CaptureChord} 格式={App.Config.SaveFormat} " +
+                           $"间隔={App.Config.LongCapturePollMilliseconds}ms 每帧{App.Config.LongCaptureScrollNotches}格 " +
+                           $"让位={string.Join(",", App.Config.YieldToProcesses)}");
+            string disk = File.ReadAllText(configPath);
+            log.AppendLine($"磁盘配置：含新热键={disk.Contains(testChord)} 含 bmp={disk.Contains("\"bmp\"")}");
+
+            // 3) 不重启，注入新键就该由我们接管
+            await Task.Delay(700);   // 等仲裁器 500ms 的归属轮询跑到新配置
+            PressChord(F10);
+            await Task.Delay(900);
+            await Task.Delay(400);
+            bool took = controller.SessionForTest != null;
+            log.AppendLine($"注入 {testChord}：我们的截图层={took}（应为 True，这条证明「应用即生效」）");
+            if (took) controller.Abort();
+        }
+        catch (Exception ex)
+        {
+            log.AppendLine("FAILED: " + ex);
+        }
+        finally
+        {
+            win?.Close();
+            // 配置原样退回，别让他的机器停在测试用的键位上。
+            App.Config.CaptureChord = realChord;
+            App.Config.SaveFormat = realFormat;
+            App.Config.LongCapturePollMilliseconds = realPoll;
+            App.Config.LongCaptureScrollNotches = realNotches;
+            App.Config.YieldToProcesses = realYield;
+            AppConfig.Save(App.Config);
+            if (backup != null) File.WriteAllBytes(configPath, backup);
+            if (Application.Current is App app) app.ReloadHotkey();
+            log.AppendLine($"已退回：热键={App.Config.CaptureChord} 格式={App.Config.SaveFormat}");
+        }
+
+        File.WriteAllText(Path.Combine(dir, "settings-report.txt"), log.ToString());
+        exit();
+    }
+
+    /// <summary>--selftest --settingsui：把设置窗口开在那里不退出，方便抓屏看版式。</summary>
+    public static void ShowSettings() => App.OpenSettings();
 
     /// <summary>
     /// 造一个「真实页面」来验拼接：大片纯白 + 零星文字行 + 固定表头/底栏。

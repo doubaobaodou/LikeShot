@@ -122,7 +122,8 @@ public sealed class LongCaptureRunner : IDisposable
         // 所以先把光标挪到选区中心，再合成滚轮。
         var restore = CaptureSession.CurrentPhysicalCursor();
         Win32.SetCursorPos(_region.X + _region.Width / 2, _region.Y + _region.Height / 2);
-        int delta = _horizontal ? Win32.WHEEL_DELTA : -Win32.WHEEL_DELTA;
+        int notches = Math.Clamp(App.Config.LongCaptureScrollNotches, 1, 5);
+        int delta = (_horizontal ? Win32.WHEEL_DELTA : -Win32.WHEEL_DELTA) * notches;
         Win32.mouse_event(_horizontal ? Win32.MOUSEEVENTF_HWHEEL : Win32.MOUSEEVENTF_WHEEL, 0, 0, delta, UIntPtr.Zero);
         Win32.SetCursorPos((int)restore.X, (int)restore.Y);
     }
@@ -160,7 +161,7 @@ public sealed class LongCaptureRunner : IDisposable
         _finished = true;
         Close();
         _exitCapture();
-        if (path != null) Exporter.CopyImage(image);
+        if (path != null && App.Config.CopyAfterSave) Exporter.CopyImage(image);
     }
 
     public void Edit()

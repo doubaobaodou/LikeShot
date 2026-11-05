@@ -19,6 +19,22 @@ public partial class App : Application
     /// <summary>自检要直接读仲裁器的判定，不给它开后门就只能靠日志猜。</summary>
     internal static HotkeyArbiter? Arbiter { get; private set; }
 
+    private static UI.SettingsWindow? _settings;
+
+    /// <summary>设置窗口只开一个：已经开着就把它带到前面。</summary>
+    public static void OpenSettings()
+    {
+        var app = (App)Current;
+        if (_settings is null)
+        {
+            _settings = new UI.SettingsWindow(Config);
+            _settings.Closed += (_, _) => _settings = null;
+        }
+        if (_settings.WindowState == WindowState.Minimized) _settings.WindowState = WindowState.Normal;
+        _settings.Show();
+        _settings.Activate();
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -51,6 +67,10 @@ public partial class App : Application
 
         if (e.Args.Contains("--capture"))
             Dispatcher.BeginInvoke(() => _controller.BeginCapture());
+        else if (e.Args.Contains("--selftest") && e.Args.Contains("--settingstest"))
+            Dispatcher.BeginInvoke(() => SelfTest.SettingsRun(_controller, () => Shutdown()));
+        else if (e.Args.Contains("--selftest") && e.Args.Contains("--settingsui"))
+            Dispatcher.BeginInvoke(SelfTest.ShowSettings);
         else if (e.Args.Contains("--selftest") && e.Args.Contains("--hotkeytest"))
             Dispatcher.BeginInvoke(() => SelfTest.HotkeyRun(_controller, () => Shutdown()));
         else if (e.Args.Contains("--selftest"))

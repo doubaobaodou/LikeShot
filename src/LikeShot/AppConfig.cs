@@ -20,7 +20,13 @@ public sealed class AppConfig
 
     public int LongCapturePollMilliseconds { get; set; } = 220;
 
+    /// <summary>长截图自动滚动时每帧推几格滚轮。和抓取间隔是两个独立的旋钮，合成一档就没法单独调。</summary>
+    public int LongCaptureScrollNotches { get; set; } = 1;
+
     public bool ShowMagnifier { get; set; } = true;
+
+    /// <summary>点「保存」之后是否顺带把图塞进剪贴板。QQ 默认是会带的。</summary>
+    public bool CopyAfterSave { get; set; } = true;
 
     [JsonIgnore]
     public static JsonSerializerOptions Options { get; } = new()

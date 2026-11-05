@@ -86,7 +86,11 @@ public sealed class CaptureController
             case CopyMode.File:
                 var saved = Exporter.SaveDialog(image, App.Config);
                 Abort();
-                if (saved != null) NotifySaved(saved);
+                if (saved != null)
+                {
+                    if (App.Config.CopyAfterSave) Exporter.CopyImage(image);
+                    NotifySaved(saved);
+                }
                 break;
 
             case CopyMode.Pin:
