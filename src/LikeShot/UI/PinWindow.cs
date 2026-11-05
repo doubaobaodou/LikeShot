@@ -58,8 +58,10 @@ public sealed class PinWindow : Window
         ShowInTaskbar = false;
         Title = "LikeShot 钉图";
         Topmost = true;
-        AllowsTransparency = false;
-        Background = new SolidColorBrush(Color.FromRgb(0x20, 0x20, 0x20));
+        // 窗口比图宽（工具条更长）或高（二级条展开）时多出来的地方必须透出去，
+        // 否则就是一块黑底；透明窗的空区域依旧可以命中（拖动/缩放照旧）。
+        AllowsTransparency = true;
+        Background = Brushes.Transparent;
         SnapsToDevicePixels = true;
         UseLayoutRounding = true;
 
@@ -90,7 +92,13 @@ public sealed class PinWindow : Window
         _toolbar.ColorPickRequested += () => _pickingColor = true;
 
         Content = _root;
-        _session.Changed += () => Dispatcher.Invoke(_surface.InvalidateVisual);
+        _session.Changed += () => Dispatcher.Invoke(() =>
+        {
+            _surface.InvalidateVisual();
+            // 二级工具条展开/收起会改工具条的高度，窗口必须跟着长高，
+            // 否则新弹出来的那一截被窗口底边裁掉——看着就像「工具条被挡住了」。
+            ApplyWindowSize();
+        });
         // 工具栏那颗「关闭钉图」走的是 session.Exit()，这条 session 是钉图窗自己的，
         // 不接就没人响应，点下去什么都不发生。
         _session.ExitRequested += Close;
@@ -446,6 +454,8 @@ public sealed class PinWindow : Window
     /// <summary>窗口 = 图片区 + 工具条（悬停时在图片下方）；图片再窄窗口也会包住整条工具条。</summary>
     private void ApplyWindowSize()
     {
+        // 二级条刚展开时直接 Measure 会拿到缓存的旧高度，先失效再量。
+        _toolbar.InvalidateMeasure();
         _toolbar.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         double tw = _toolbar.DesiredSize.Width, th = _toolbar.DesiredSize.Height;
         bool stripVisible = _toolbar.Visibility == Visibility.Visible;

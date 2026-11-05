@@ -152,14 +152,21 @@ public sealed class ToolbarStrip : Border
     private ToggleButton? _autoScroll;
     private bool _autoScrollOn;
 
-    public double NaturalWidth => MeasureOr(ActualWidth);
-    public double NaturalHeight => MeasureOr(ActualHeight);
+    /// <summary>无头验证与日志用：二级条当前是否展开。</summary>
+    internal Visibility SubHostVisibility => _subHost.Visibility;
 
-    private double MeasureOr(double fallback)
+    // 尺寸每次都现量：二级条刚展开的那一下 ActualHeight 还是旧值，
+    // 拿它定位会让工具条看起来晚一拍才长高。
+    public double NaturalWidth => FreshMeasure().Width;
+    public double NaturalHeight => FreshMeasure().Height;
+
+    private Size FreshMeasure()
     {
-        if (fallback > 0) return fallback;
+        // 二级条 Visibility 刚翻转完就量的话，Measure 会直接吐缓存的旧 DesiredSize，
+        // 先强制失效再量才能拿到展开后的真实尺寸。
+        InvalidateMeasure();
         Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-        return DesiredSize.Width;
+        return DesiredSize;
     }
 
     // ---------- 主条 ----------
