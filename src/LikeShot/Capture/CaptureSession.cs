@@ -201,6 +201,10 @@ public sealed class CaptureSession
             }
         }
 
+        // 已经有选区了：点选区外面不再重新框选（QQ 里外面的暗区是死的），
+        // 要调选区用边框手柄，要重选走右键菜单的「重新选择截图区域」。
+        if (HasSelection) return;
+
         _dragStart = physical;
         _drag = DragMode.NewRect;
         PolygonPoints = null;

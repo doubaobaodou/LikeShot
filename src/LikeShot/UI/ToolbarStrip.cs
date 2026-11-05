@@ -60,22 +60,22 @@ public sealed class ToolbarStrip : Border
 
         _row = new StackPanel { Orientation = Orientation.Horizontal };
 
-        // 二级工具条 + 色板贴在主条上方，同一条带里，不用 Popup：
+        // 二级工具条 + 色板贴在主条下方展开（QQ 是往下弹的），同一条带里，不用 Popup：
         // Popup 在多层 topmost 窗口之间容易被截图层自己的 z-order 压住。
         _subStack = new StackPanel { Orientation = Orientation.Vertical };
         _subHost = new Border
         {
             Background = Theme.Brush(Theme.BarBackground),
-            CornerRadius = new CornerRadius(4, 4, 0, 0),
-            Padding = new Thickness(2, 4, 2, 2),
-            Margin = new Thickness(-Theme.BarPadding + 2, -4, -Theme.BarPadding + 2, 4),
+            CornerRadius = new CornerRadius(0, 0, 4, 4),
+            Padding = new Thickness(2, 2, 2, 4),
+            Margin = new Thickness(-Theme.BarPadding + 2, 0, -Theme.BarPadding + 2, -4),
             Visibility = Visibility.Collapsed,
             Child = _subStack
         };
 
         var stack = new StackPanel { Orientation = Orientation.Vertical };
-        stack.Children.Add(_subHost);
         stack.Children.Add(_row);
+        stack.Children.Add(_subHost);
         Child = stack;
 
         switch (mode)
