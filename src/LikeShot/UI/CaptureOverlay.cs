@@ -4,6 +4,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+
 using System.Windows.Media.Imaging;
 using LikeShot.Capture;
 using LikeShot.Drawing;
@@ -25,6 +26,12 @@ public sealed class CaptureOverlay : Window
     private TextBox? _textEditor;
     private Point _textAnchor;
     private TextAnnotation? _editingText;
+    private bool _pickingColor;   // 吸管模式：下一次点击屏幕就是取色
+    private Border _propBar = null!;
+    private TextBlock _propSizeText = null!;
+    private Slider _propRadius = null!;
+    private TextBlock _propRadiusValue = null!;
+    private CheckBox _propShadow = null!;
 
     public CaptureOverlay(CaptureSession session, Display display)
     {
@@ -51,6 +58,8 @@ public sealed class CaptureOverlay : Window
         _chrome = new Canvas { IsHitTestVisible = true };
         _toolbar = new ToolbarStrip(session, display) { Visibility = Visibility.Collapsed };
         _chrome.Children.Add(_toolbar);
+        _toolbar.ColorPickRequested += () => _pickingColor = true;
+        BuildPropBar();
 
         var root = new Grid();
         root.Children.Add(_host);
@@ -112,7 +121,141 @@ public sealed class CaptureOverlay : Window
         {
             _host.InvalidateVisual();
             PositionToolbar();
+            PositionPropBar();
         });
+    }
+
+    // ---------- 选区属性条：尺寸 + 圆角 + 阴影 ----------
+
+    private void BuildPropBar()
+    {
+        _propSizeText = new TextBlock
+        {
+            FontSize = 12.5,
+            Foreground = Theme.Brush(Theme.LoupeText),
+            VerticalAlignment = VerticalAlignment.Center,
+            MinWidth = 72
+        };
+        _propRadius = new Slider
+        {
+            Minimum = 0,
+            Maximum = 32,
+            Width = 90,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsMoveToPointEnabled = true,
+            Style = ToolbarStrip.SliderStyle()
+        };
+        _propRadius.ValueChanged += (_, e) =>
+            _session.SetCornerRadius((int)Math.Round(e.NewValue, MidpointRounding.AwayFromZero));
+        _propRadiusValue = new TextBlock
+        {
+            FontSize = 12,
+            Foreground = Theme.Brush(Theme.LoupeText),
+            VerticalAlignment = VerticalAlignment.Center,
+            MinWidth = 18,
+            TextAlignment = TextAlignment.Center
+        };
+        _propShadow = MakeShadowCheck();
+        _propShadow.Click += (_, _) => _session.SetDropShadow(_propShadow.IsChecked == true);
+
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(_propSizeText);
+        row.Children.Add(new TextBlock
+        {
+            Text = "圆角",
+            FontSize = 11.5,
+            Foreground = Theme.Brush(Theme.LoupeMuted),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(12, 0, 6, 0)
+        });
+        row.Children.Add(_propRadius);
+        row.Children.Add(_propRadiusValue);
+        row.Children.Add(new TextBlock
+        {
+            Text = "阴影",
+            FontSize = 11.5,
+            Foreground = Theme.Brush(Theme.LoupeMuted),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(12, 0, 6, 0)
+        });
+        row.Children.Add(_propShadow);
+
+        _propBar = new Border
+        {
+            Background = Theme.Brush(Theme.LoupeBackground),
+            BorderBrush = Theme.Brush(Theme.BarBorder),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(10, 5, 10, 5),
+            Child = row,
+            Visibility = Visibility.Collapsed
+        };
+        _chrome.Children.Add(_propBar);
+    }
+
+    private void PositionPropBar()
+    {
+        if (!_session.HasSelection || _toolbar.Visibility != Visibility.Visible)
+        {
+            _propBar.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var sel = _session.FinalRect();
+        _propSizeText.Text = $"{sel.Width} × {sel.Height}";
+        if ((int)Math.Round(_propRadius.Value, MidpointRounding.AwayFromZero) != _session.CornerRadiusDp)
+            _propRadius.Value = _session.CornerRadiusDp;
+        _propRadiusValue.Text = _session.CornerRadiusDp.ToString();
+        _propShadow.IsChecked = _session.DropShadow;
+
+        var dip = _display.ToDip(sel.X, sel.Y);
+        _propBar.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        double w = _propBar.DesiredSize.Width, h = _propBar.DesiredSize.Height;
+        double left = Math.Clamp(dip.X, 4, Math.Max(4, _display.Bounds.Width / _display.Scale - w - 4));
+        double top = dip.Y - h - 8;
+        if (top < 2) top = dip.Y + 8;
+        Canvas.SetLeft(_propBar, left);
+        Canvas.SetTop(_propBar, top);
+        _propBar.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>属性条上的勾选框，和设置窗口那款同一画法，尺寸缩到 15。</summary>
+    private static CheckBox MakeShadowCheck()
+    {
+        var style = new Style(typeof(CheckBox));
+        var template = new ControlTemplate(typeof(CheckBox));
+        var box = new FrameworkElementFactory(typeof(Border));
+        box.Name = "box";
+        box.SetValue(Border.WidthProperty, 15.0);
+        box.SetValue(Border.HeightProperty, 15.0);
+        box.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+        box.SetValue(Border.BackgroundProperty, Theme.Brush(Colors.White));
+        box.SetValue(Border.BorderBrushProperty, Theme.Brush(Color.FromRgb(0x8A, 0x8A, 0x8A)));
+        box.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+        box.SetValue(Border.VerticalAlignmentProperty, VerticalAlignment.Center);
+
+        var check = new FrameworkElementFactory(typeof(TextBlock));
+        check.Name = "check";
+        check.SetValue(TextBlock.TextProperty, "\uE73E");
+        check.SetValue(TextBlock.FontFamilyProperty, new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"));
+        check.SetValue(TextBlock.FontSizeProperty, 9.0);
+        check.SetValue(TextBlock.ForegroundProperty, Theme.Brush(Colors.White));
+        check.SetValue(TextBlock.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        check.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
+        check.SetValue(TextBlock.MarginProperty, new Thickness(0, 1, 0, 0));
+        check.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+        box.AppendChild(check);
+        template.VisualTree = box;
+
+        var isChecked = new Trigger { Property = ToggleButton.IsCheckedProperty, Value = true };
+        isChecked.Setters.Add(new Setter(Border.BackgroundProperty, Theme.Brush(Theme.Accent), "box"));
+        isChecked.Setters.Add(new Setter(Border.BorderBrushProperty, Theme.Brush(Theme.Accent), "box"));
+        isChecked.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible, "check"));
+        template.Triggers.Add(isChecked);
+
+        style.Setters.Add(new Setter(Control.TemplateProperty, template));
+        style.Setters.Add(new Setter(FrameworkElement.CursorProperty, Cursors.Hand));
+        return new CheckBox { Style = style, VerticalAlignment = VerticalAlignment.Center };
     }
 
     private void PositionToolbar()
@@ -144,6 +287,18 @@ public sealed class CaptureOverlay : Window
     private void OnMouseDown(object sender, MouseButtonEventArgs e)
     {
         var p = ToPhysical(e.GetPosition(this));
+
+        // 吸管模式：这一下点哪儿，色就从哪儿来，然后交还给工具栏。
+        if (_pickingColor)
+        {
+            var picked = _session.Snapshot.PixelAt((int)p.X, (int)p.Y);
+            if (picked.A == 0) picked = Colors.Black;
+            _session.SetColor(picked);
+            _pickingColor = false;
+            e.Handled = true;
+            return;
+        }
+
         _session.PointerDown(p, LeftOrRight.Left);
         if (e.ClickCount == 2) _session.DoubleClick(p);
         _host.InvalidateVisual();
@@ -208,29 +363,27 @@ public sealed class CaptureOverlay : Window
 
     private void UpdateCursor(Point physical)
     {
+        if (_pickingColor) { Cursor = Cursors.Cross; return; }
         if (!_session.HasSelection) { Cursor = Cursors.Cross; return; }
         if (_session.OverText(physical)) { Cursor = Cursors.Hand; return; }
         if (_session.Tool != ToolKind.None) { Cursor = _session.Tool == ToolKind.Text ? Cursors.IBeam : Cursors.Cross; return; }
 
-        var r = _session.FinalRect();
-        if (!_session.Inside(physical)) { Cursor = Cursors.Cross; return; }
-
-        foreach (var (handle, point) in _session.HandleWithPositions())
+        // 手柄点和四条边框线都给缩放光标，边框外一 needle 的容差也算数。
+        int handle = _session.HitHandle(physical);
+        if (handle >= 0)
         {
-            double tol = Math.Max(6, 10 / _display.Scale);
-            if (Math.Abs(point.X - physical.X) <= tol && Math.Abs(point.Y - physical.Y) <= tol)
+            Cursor = handle switch
             {
-                Cursor = handle switch
-                {
-                    0 or 4 => Cursors.SizeNWSE,
-                    2 or 6 => Cursors.SizeNESW,
-                    1 or 5 => Cursors.SizeNS,
-                    3 or 7 => Cursors.SizeWE,
-                    _ => Cursors.Arrow
-                };
-                return;
-            }
+                0 or 4 => Cursors.SizeNWSE,
+                2 or 6 => Cursors.SizeNESW,
+                1 or 5 => Cursors.SizeNS,
+                3 or 7 => Cursors.SizeWE,
+                _ => Cursors.Arrow
+            };
+            return;
         }
+
+        if (!_session.Inside(physical)) { Cursor = Cursors.Cross; return; }
         Cursor = Cursors.SizeAll;
     }
 
@@ -331,12 +484,15 @@ public sealed class CaptureOverlay : Window
 
             Int32Rect keep = Int32Rect.Empty;
             Geometry? keepGeometry = null;
+            double radiusPx = session.CornerRadiusDp * scale;
             if (session.Phase == CapturePhase.Selected)
             {
                 keep = session.FinalRect();
                 keepGeometry = session.PolygonPoints is { Count: >= 3 }
                     ? RectExt.ClosedPath(session.PolygonPoints)
-                    : new RectangleGeometry(RectFrom(keep));
+                    : radiusPx > 0
+                        ? new RectangleGeometry(RectFrom(keep), radiusPx, radiusPx)
+                        : new RectangleGeometry(RectFrom(keep));
                 DrawDimOutside(dc, full, keepGeometry);
             }
             else if (session.HoverWindow is { } hover)
@@ -351,6 +507,12 @@ public sealed class CaptureOverlay : Window
 
             if (session.Phase == CapturePhase.Selected)
             {
+                // 阴影实时预览：分层软影直接叠在暗区上；自由截图没有圆角和影子。
+                if (session.DropShadow && session.PolygonPoints is not { Count: >= 3 })
+                {
+                    CaptureSession.DrawSoftShadow(dc, RectFrom(keep), radiusPx, 0, scale);
+                }
+
                 var mosaics = session.Mosaics;
                 if (mosaics != null)
                 {
@@ -384,9 +546,16 @@ public sealed class CaptureOverlay : Window
         {
             var rect = RectFrom(sel);
             var pen = new Pen(Theme.Brush(Theme.SelectionBorder), Math.Max(1, 1 * scale));
-            dc.DrawRectangle(null, pen, rect);
 
-            if (session.PolygonPoints is { Count: >= 3 }) return;
+            if (session.PolygonPoints is { Count: >= 3 })
+            {
+                dc.DrawRectangle(null, pen, rect);
+                return;
+            }
+
+            double radiusPx = session.CornerRadiusDp * scale;
+            if (radiusPx > 0) dc.DrawGeometry(null, pen, new RectangleGeometry(rect, radiusPx, radiusPx));
+            else dc.DrawRectangle(null, pen, rect);
 
             double hs = Math.Max(5, 7 * scale);
             foreach (var p in session.HandleWithPositions().Select(x => x.Point))

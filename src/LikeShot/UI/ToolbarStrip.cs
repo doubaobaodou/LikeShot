@@ -43,8 +43,13 @@ public sealed class ToolbarStrip : Border
     private readonly List<Border> _colorSwatches = [];
     private readonly List<(Color Color, Button Button)> _colorButtons = [];
     private StackPanel _colorStrip = new();
+    private Button? _rainbowButton;
+    private ColorPickerPanel? _picker;
     private bool _colorStripOpen;
     private ToolKind _lastTool = ToolKind.None;
+
+    /// <summary>吸管按钮按下去之后由遮罩层接管下一次点击。</summary>
+    public event Action? ColorPickRequested;
 
     public ToolbarStrip(CaptureSession session, Display display, ToolbarMode mode = ToolbarMode.Standard)
     {
@@ -575,7 +580,43 @@ public sealed class ToolbarStrip : Border
             _colorButtons.Add((color, sw));
             colors.Children.Add(sw);
         }
-        return new StackPanel { Orientation = Orientation.Vertical, Children = { colors } };
+
+        // 行尾的彩虹块：打开自定义取色板（色域方块 + 色相条 + RGB + 吸管）。
+        _rainbowButton = new Button
+        {
+            Width = 15,
+            Height = 15,
+            Margin = new Thickness(2),
+            BorderThickness = new Thickness(1),
+            BorderBrush = Theme.Brush(Theme.SwatchBorder),
+            ToolTip = "自定义颜色",
+            Focusable = false,
+            Style = SwatchStyle(),
+            Background = new LinearGradientBrush(
+                Color.FromRgb(255, 64, 64), Color.FromRgb(64, 160, 255), 30)
+            {
+                GradientStops =
+                {
+                    new GradientStop(Color.FromRgb(255, 70, 70), 0),
+                    new GradientStop(Color.FromRgb(255, 200, 60), 0.35),
+                    new GradientStop(Color.FromRgb(90, 220, 90), 0.65),
+                    new GradientStop(Color.FromRgb(80, 140, 255), 1)
+                }
+            }
+        };
+        _rainbowButton.Click += (_, _) =>
+        {
+            if (_picker == null) return;
+            _picker.Visibility = _picker.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+            if (_picker.Visibility == Visibility.Visible) _picker.SyncFromColor(_session.Color);
+        };
+        colors.Children.Add(_rainbowButton);
+
+        _picker = new ColorPickerPanel(_session);
+        _picker.PickRequested += () => ColorPickRequested?.Invoke();
+        _picker.Visibility = Visibility.Collapsed;
+
+        return new StackPanel { Orientation = Orientation.Vertical, Children = { colors, _picker } };
     }
 
     private static FrameworkElement WrapPanel(StackPanel row)
@@ -643,7 +684,7 @@ public sealed class ToolbarStrip : Border
     /// QQ 那种细滑条：3px 圆角轨道 + 12px 小圆头。默认滑条又粗又方，放不进二级条。
     /// 模板里有 Track/Thumb 嵌套，用工厂树拼太绕，改按当前主题把色值插进 XAML 生成。
     /// </summary>
-    private static Style SliderStyle()
+    internal static Style SliderStyle()
     {
         string track = Theme.LightUi ? "#FFDFDFDF" : "#FF4A5158";
         string thumb = Theme.LightUi ? "#FFFFFFFF" : "#FFE8EAED";
@@ -766,6 +807,7 @@ public sealed class ToolbarStrip : Border
             }
             foreach (var (color, btn) in _colorButtons)
                 btn.BorderBrush = color == _session.Color ? Theme.Brush(Theme.Accent) : Theme.Brush(Theme.SwatchBorder);
+            _picker?.SyncFromColor(_session.Color);
 
             if (_mode == ToolbarMode.LongCapture)
             {

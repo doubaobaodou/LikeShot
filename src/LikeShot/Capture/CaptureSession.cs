@@ -43,6 +43,10 @@ public sealed class CaptureSession
     public ShapeKind ShapeCurrent { get; private set; } = ShapeKind.Rect;
     public bool ShapeFilled { get; private set; }
 
+    /// <summary>成图的圆角（96dpi 像素）和投影，选区上方那条属性条里调。</summary>
+    public int CornerRadiusDp { get; private set; }
+    public bool DropShadow { get; private set; }
+
     /// <summary>线宽按 96dpi 的像素记，落笔时乘 UiScale——滑条上显示的数字就是它。</summary>
     public int WidthDp { get; private set; } = 4;
     public int FontIndex { get; private set; } = 1;
@@ -411,6 +415,18 @@ public sealed class CaptureSession
         Changed?.Invoke();
     }
 
+    public void SetCornerRadius(int dp)
+    {
+        CornerRadiusDp = Math.Clamp(dp, 0, 32);
+        Changed?.Invoke();
+    }
+
+    public void SetDropShadow(bool on)
+    {
+        DropShadow = on;
+        Changed?.Invoke();
+    }
+
     /// <summary>实心/空心切换和换色时，正在拖的那一笔也要跟着变。</summary>
     private void ApplyLiveFill()
     {
@@ -466,25 +482,57 @@ public sealed class CaptureSession
 
     // ---------- 结果 ----------
 
+    /// <summary>阴影的渲染参数：四周留出的边距要盖住最外一层影。</summary>
+    private const double ShadowSpreadDp = 24, ShadowPadDp = 26;
+
     public BitmapSource RenderResult()
     {
         var bounds = Snapshot.Intersect(FinalRect());
         if (bounds.Width < 1 || bounds.Height < 1) return Snapshot.Image;
 
-        var mask = PolygonPoints is { Count: >= 3 }
-            ? RectExt.ClosedPath(PolygonPoints.Select(p => new Point(p.X - bounds.X, p.Y - bounds.Y)))
-            : null;
+        double radiusPx = CornerRadiusDp * UiScale;
+        double pad = DropShadow ? ShadowPadDp * UiScale : 0;
         var mosaics = Mosaics ?? new MosaicSource(Snapshot, bounds);
+        var mask = PolygonPoints is { Count: >= 3 }
+            ? RectExt.ClosedPath(PolygonPoints.Select(p => new Point(p.X - bounds.X + pad, p.Y - bounds.Y + pad)))
+            : null;
 
-        return RenderSurface.ToBitmap(bounds.Width, bounds.Height, dc =>
+        int w = (int)(bounds.Width + pad * 2), h = (int)(bounds.Height + pad * 2);
+        return RenderSurface.ToBitmap(w, h, dc =>
         {
-            if (mask != null) dc.PushClip(mask);
-            dc.DrawImage(new CroppedBitmap(Snapshot.Image, bounds), new Rect(0, 0, bounds.Width, bounds.Height));
-            dc.PushTransform(new TranslateTransform(-bounds.X, -bounds.Y));
+            var rect = new Rect(pad, pad, bounds.Width, bounds.Height);
+            var round = radiusPx > 0 ? new RectangleGeometry(rect, radiusPx, radiusPx) : null;
+
+            if (DropShadow) DrawSoftShadow(dc, rect, radiusPx, pad, UiScale);
+
+            Geometry? clip = mask ?? round;
+            if (clip != null) dc.PushClip(clip);
+            dc.DrawImage(new CroppedBitmap(Snapshot.Image, bounds), rect);
+            dc.PushTransform(new TranslateTransform(-bounds.X + pad, -bounds.Y + pad));
             Layer.DrawAll(dc, new RenderContext(mosaics, 1.0, mosaics.Region));
             dc.Pop();
-            if (mask != null) dc.Pop();
+            if (clip != null) dc.Pop();
         });
+    }
+
+    /// <summary>
+    /// 分层软影：由深到浅向外画八层圆角矩形叠出来。DrawingContext.PushEffect 只收
+    /// 已淘汰的 BitmapEffect，现代 DropShadowEffect 塞不进去，叠层是最稳的软影。
+    /// </summary>
+    internal static void DrawSoftShadow(DrawingContext dc, Rect rect, double radiusPx, double pad, double scale)
+    {
+        const int layers = 8;
+        double spread = ShadowSpreadDp * scale;
+        for (int i = layers; i >= 1; i--)
+        {
+            double t = (double)i / layers;
+            double inflate = spread * t;
+            byte alpha = (byte)Math.Round(28 * (1 - t) + 4);
+            var r = new Rect(rect.X - inflate, rect.Y - inflate, rect.Width + inflate * 2, rect.Height + inflate * 2);
+            double rPx = radiusPx > 0 ? radiusPx + inflate : 0;
+            Geometry geo = rPx > 0 ? new RectangleGeometry(r, rPx, rPx) : new RectangleGeometry(r);
+            dc.DrawGeometry(Theme.Brush(Color.FromArgb(alpha, 0, 0, 0)), null, geo);
+        }
     }
 
     public void RebuildMosaics()
@@ -598,12 +646,22 @@ public sealed class CaptureSession
     /// <summary>鼠标悬停在文字上时给个抓手光标。</summary>
     public bool OverText(Point p) => HasSelection && HitText(p) != null;
 
-    private int HitHandle(Point p)
+    /// <summary>
+    /// 命中检测：八个手柄点之外，四条边框线整条也能拽（QQ 就是拖着边放大缩小的），
+    /// 边上映射到那条边的中点手柄；角上的点先判，优先级更高。
+    /// </summary>
+    public int HitHandle(Point p)
     {
         double tol = Math.Max(6, 10 / UiScale);
-        var handles = HandlePoints(Selection);
+        var s = Selection;
+        var handles = HandlePoints(s);
         for (int i = 0; i < handles.Length; i++)
             if (Math.Abs(handles[i].X - p.X) <= tol && Math.Abs(handles[i].Y - p.Y) <= tol) return i;
+
+        if (Math.Abs(p.X - s.X) <= tol && p.Y >= s.Y - tol && p.Y <= s.Y + s.Height + tol) return 7;
+        if (Math.Abs(p.X - (s.X + s.Width)) <= tol && p.Y >= s.Y - tol && p.Y <= s.Y + s.Height + tol) return 3;
+        if (Math.Abs(p.Y - s.Y) <= tol && p.X >= s.X - tol && p.X <= s.X + s.Width + tol) return 1;
+        if (Math.Abs(p.Y - (s.Y + s.Height)) <= tol && p.X >= s.X - tol && p.X <= s.X + s.Width + tol) return 5;
         return -1;
     }
 
