@@ -1,6 +1,7 @@
 # LikeShot
 
 [![下载最新版本](https://img.shields.io/github/v/release/doubaobaodou/LikeShot)](https://github.com/doubaobaodou/LikeShot/releases/latest)
+![构建](https://github.com/doubaobaodou/LikeShot/actions/workflows/build.yml/badge.svg)
 ![平台](https://img.shields.io/badge/Windows-10%2F11-blue)
 [![许可](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
