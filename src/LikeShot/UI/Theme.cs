@@ -6,23 +6,49 @@ namespace LikeShot.UI;
 /// <summary>
 /// 尺寸、字号、色值都按 QQ NT 9.9.36 的 UI 定义抄：
 /// 按钮 30×30、右外边距 6、放大镜整块 132×152、放大镜画面 117×84、完成按钮 56×18。
+/// 截图层的 UI 颜色分深浅两套（浅色就是 QQ 那种白工具栏），由 LightUi 开关切换；
+/// 工具栏这些元素每次截图都重新构建，所以切了开关下一张截图就换装。
 /// </summary>
 public static class Theme
 {
-    public static readonly Color BarBackground = Color.FromArgb(0xF2, 0x2B, 0x2F, 0x36);
-    public static readonly Color BarBorder = Color.FromRgb(0x3D, 0x42, 0x4B);
-    public static readonly Color IconBrush = Color.FromRgb(0xE8, 0xEA, 0xED);
-    public static readonly Color ButtonHover = Color.FromRgb(0x43, 0x49, 0x54);
-    public static readonly Color ButtonPushed = Color.FromRgb(0x1F, 0x23, 0x29);
+    /// <summary>截图 UI 用浅色还是深色。设置里改完「应用」就写进来，不用重启。</summary>
+    public static bool LightUi { get; set; }
+
+    public static Color BarBackground => LightUi
+        ? Color.FromArgb(0xF7, 0xFF, 0xFF, 0xFF)
+        : Color.FromArgb(0xF2, 0x2B, 0x2F, 0x36);
+    public static Color BarBorder => LightUi
+        ? Color.FromRgb(0xE3, 0xE3, 0xE3)
+        : Color.FromRgb(0x3D, 0x42, 0x4B);
+    public static Color IconBrush => LightUi
+        ? Color.FromRgb(0x38, 0x38, 0x38)
+        : Color.FromRgb(0xE8, 0xEA, 0xED);
+    public static Color ButtonHover => LightUi
+        ? Color.FromRgb(0xEC, 0xEC, 0xEC)
+        : Color.FromRgb(0x43, 0x49, 0x54);
+    public static Color ButtonPushed => LightUi
+        ? Color.FromRgb(0xDE, 0xDE, 0xDE)
+        : Color.FromRgb(0x1F, 0x23, 0x29);
     public static readonly Color Accent = Color.FromRgb(0x31, 0x8A, 0xFF);
     public static readonly Color SelectionBorder = Color.FromRgb(0x31, 0x8A, 0xFF);
     public static readonly Color HandleFill = Colors.White;
     public static readonly Color DimOutside = Color.FromArgb(0x8C, 0x00, 0x00, 0x00);
-    public static readonly Color LoupeBackground = Color.FromArgb(0xF2, 0x23, 0x26, 0x2B);
-    public static readonly Color LoupeText = Color.FromRgb(0xDF, 0xE3, 0xE8);
-    public static readonly Color LoupeMuted = Color.FromRgb(0x9A, 0xA3, 0xAF);
-    public static readonly Color FinishButton = Color.FromRgb(0xE8, 0xEA, 0xED);
-    public static readonly Color FinishText = Color.FromRgb(0x1F, 0x23, 0x29);
+    public static Color LoupeBackground => LightUi
+        ? Color.FromArgb(0xF7, 0xFF, 0xFF, 0xFF)
+        : Color.FromArgb(0xF2, 0x23, 0x26, 0x2B);
+    public static Color LoupeText => LightUi
+        ? Color.FromRgb(0x1F, 0x23, 0x29)
+        : Color.FromRgb(0xDF, 0xE3, 0xE8);
+    public static Color LoupeMuted => LightUi
+        ? Color.FromRgb(0x76, 0x76, 0x76)
+        : Color.FromRgb(0x9A, 0xA3, 0xAF);
+    public static Color FinishButton => LightUi ? Accent : Color.FromRgb(0xE8, 0xEA, 0xED);
+    public static Color FinishText => LightUi ? Colors.White : Color.FromRgb(0x1F, 0x23, 0x29);
+
+    /// <summary>色板上未选中色块的描边：深色带里描白，白色带里描灰，否则白色块就隐形了。</summary>
+    public static Color SwatchBorder => LightUi
+        ? Color.FromRgb(0xC9, 0xC9, 0xC9)
+        : Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF);
 
     public const double ButtonSize = 30;
     public const double ButtonGap = 6;

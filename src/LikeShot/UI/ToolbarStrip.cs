@@ -325,7 +325,7 @@ public sealed class ToolbarStrip : Border
                 Margin = new Thickness(2),
                 Background = new SolidColorBrush(color),
                 BorderThickness = new Thickness(1),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF)),
+                BorderBrush = Theme.Brush(Theme.SwatchBorder),
                 ToolTip = $"{name} #{color.R:X2}{color.G:X2}{color.B:X2}",
                 Focusable = false,
                 Style = SwatchStyle()
@@ -391,7 +391,7 @@ public sealed class ToolbarStrip : Border
                 btn.Background = tool == _session.Tool ? Theme.Brush(Theme.ButtonPushed) : Brushes.Transparent;
 
             foreach (var (color, btn) in _colorButtons)
-                btn.BorderBrush = color == _session.Color ? Theme.Brush(Theme.Accent) : new SolidColorBrush(Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF));
+                btn.BorderBrush = color == _session.Color ? Theme.Brush(Theme.Accent) : Theme.Brush(Theme.SwatchBorder);
 
             foreach (var (index, btn) in _widthButtons)
                 btn.Background = index == _session.WidthIndex ? Theme.Brush(Theme.ButtonPushed) : Brushes.Transparent;

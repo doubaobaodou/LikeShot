@@ -57,6 +57,7 @@ public partial class App : Application
         };
 
         Config = AppConfig.Load();
+        UI.Theme.LightUi = Config.CaptureUiTheme == "light";
         Log.Write($"启动 pid={Environment.ProcessId} 热键={Config.CaptureChord} 让位进程={string.Join(",", Config.YieldToProcesses)} 日志={Log.PathHint}");
         _controller = new CaptureController(this);
 

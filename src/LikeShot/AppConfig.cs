@@ -28,6 +28,9 @@ public sealed class AppConfig
     /// <summary>点「保存」之后是否顺带把图塞进剪贴板。QQ 默认是会带的。</summary>
     public bool CopyAfterSave { get; set; } = true;
 
+    /// <summary>截图那层 UI（工具栏、放大镜）的配色：dark 或 light。浅色就是 QQ 那种白工具栏。</summary>
+    public string CaptureUiTheme { get; set; } = "dark";
+
     [JsonIgnore]
     public static JsonSerializerOptions Options { get; } = new()
     {
