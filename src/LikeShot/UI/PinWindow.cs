@@ -32,6 +32,11 @@ public sealed class PinWindow : Window
     private Rect _resizeStart;
     private Point _resizeAnchor;
     private bool _hovering;
+    private bool _drawing;         // 画具落笔中：要捕获鼠标，松开时把 PointerUp 交还 session
+    private bool _pickingColor;    // 吸管模式：下一次点图就是取色
+    private TextBox? _pinEditor;
+    private Point _pinTextAnchor;
+    private TextAnnotation? _pinEditing;
 
     private const double GripTolerance = 8;
     private const double MinDip = 40;
@@ -62,6 +67,9 @@ public sealed class PinWindow : Window
             ScreenSnapshot.FromBitmap(image, sourceRect),
             displays,
             _baseScale);
+        // 钉图没有框选这一步，但打码源、导出、命中检测全都建立在「有选区」上；
+        // 不设的话标注画不出来、完成时也会退回原图丢掉全部编辑。
+        _session.UseFullSelection();
 
         _surface = new PinSurface(_session, this);
         _root = new Canvas();
@@ -78,12 +86,17 @@ public sealed class PinWindow : Window
             }
         };
         _root.Children.Add(_toolbar);
+        // 二级条里的吸管：点下去由钉图窗自己接管下一次点击，主截图层是遮罩层接的。
+        _toolbar.ColorPickRequested += () => _pickingColor = true;
 
         Content = _root;
         _session.Changed += () => Dispatcher.Invoke(_surface.InvalidateVisual);
         // 工具栏那颗「关闭钉图」走的是 session.Exit()，这条 session 是钉图窗自己的，
         // 不接就没人响应，点下去什么都不发生。
         _session.ExitRequested += Close;
+        // 文字工具：主截图层的编辑框开在遮罩层的 Canvas 上，这里开在自己的 Canvas 上。
+        _session.TextPlacementRequested += p => OpenPinTextEditor(p, "", _session.Color, _session.FontSize, editTarget: null);
+        _session.TextEditRequested += t => OpenPinTextEditor(t.Position, t.Text, t.Color, t.FontSize, editTarget: t);
 
         // 初始大小 = 它在屏幕上原本占的那块，看起来就是「原地钉住」。
         _imageW = _image.PixelWidth / _baseScale;
@@ -138,8 +151,29 @@ public sealed class PinWindow : Window
     {
         var pos = e.GetPosition(this);
 
+        // 吸管模式：这一下点图上的哪，色就从哪来。
+        if (_pickingColor)
+        {
+            _pickingColor = false;
+            var sp = ToPhysical(pos);
+            var picked = _session.Snapshot.PixelAt((int)sp.X, (int)sp.Y);
+            if (picked.A == 0) picked = Colors.Black;
+            _session.SetColor(picked);
+            return;
+        }
+
+        // 输入框开着时先落字；工具还是文字的话，这一下顺势再开下一个框。
+        if (_pinEditor != null) CommitPinText();
+
         if (e.ClickCount == 2 && _session.Tool == ToolKind.None)
         {
+            // 双击文字 = 改字；双击空白 = 复制收工。
+            var hit = _session.HitText(ToPhysical(pos));
+            if (hit != null)
+            {
+                OpenPinTextEditor(hit.Position, hit.Text, hit.Color, hit.FontSize, editTarget: hit);
+                return;
+            }
             FinishToClipboard();
             return;
         }
@@ -147,6 +181,9 @@ public sealed class PinWindow : Window
         // 画具激活时点图片区落笔；点在下方工具条区域不算。
         if (_session.Tool != ToolKind.None && pos.X <= _imageW && pos.Y <= _imageH)
         {
+            // 捕获鼠标：拖出图片（甚至窗口）外笔画也不能断，松手时才收笔。
+            _drawing = true;
+            CaptureMouse();
             _session.PointerDown(ToPhysical(pos), LeftOrRight.Left);
             _surface.InvalidateVisual();
             return;
@@ -173,15 +210,27 @@ public sealed class PinWindow : Window
             ShowToolbar(true);
             _surface.InvalidateVisual();
         }
+
+        if (_drawing)
+        {
+            // 之前这里从不转发 PointerUp，会话的拖动状态一直挂着，
+            // 松开鼠标后笔画还会跟着鼠标继续长。
+            _drawing = false;
+            ReleaseMouseCapture();
+            _session.PointerUp(ToPhysical(e.GetPosition(this)));
+            _surface.InvalidateVisual();
+        }
     }
 
     private void OnMove(object sender, MouseEventArgs e)
     {
         var pos = e.GetPosition(this);
 
-        if (_grip != Grip.None && e.LeftButton == MouseButtonState.Pressed)
+        if ((_grip != Grip.None || _drawing) && e.LeftButton == MouseButtonState.Pressed)
         {
-            ResizeTo(pos);
+            if (_grip != Grip.None) ResizeTo(pos);
+            else _session.PointerMove(ToPhysical(pos));
+            _surface.InvalidateVisual();
             return;
         }
 
@@ -225,9 +274,11 @@ public sealed class PinWindow : Window
     private void ZoomBy(double factor, Point anchorInWindow)
     {
         double baseW = _image.PixelWidth / _baseScale;
-        double newW = Math.Clamp(_imageW * factor, baseW * 0.15, baseW * 8);
-        double applied = newW / _imageW;
-        double newH = Math.Max(MinDip, _imageH * applied);
+        double applied = Math.Clamp(factor, baseW * 0.15 / _imageW, baseW * 8 / _imageW);
+        // 最小尺寸优先于缩放上下限：太小的图缩到底也不能小于 MinDip，且保持等比不变形。
+        applied = Math.Max(Math.Max(applied, MinDip / _imageW), MinDip / _imageH);
+        double newW = _imageW * applied;
+        double newH = _imageH * applied;
 
         // 光标在屏幕上那点不动：窗口原点按缩放量反向挪。
         double screenX = Left + anchorInWindow.X;
@@ -318,6 +369,72 @@ public sealed class PinWindow : Window
         _sourceRect.X + dip.X / DipPerPhysicalX,
         _sourceRect.Y + dip.Y / DipPerPhysicalY);
 
+    // ---------- 文字工具 ----------
+
+    /// <summary>和截图层同一套交互：原字先藏、Enter 落字、Esc 丢弃、点外面自动提交。</summary>
+    private void OpenPinTextEditor(Point physical, string initial, Color color, int fontSizePx, TextAnnotation? editTarget)
+    {
+        CommitPinText();
+
+        _pinTextAnchor = physical;
+        _pinEditing = editTarget;
+        if (_pinEditing != null) _pinEditing.Hidden = true;
+
+        double dx = (physical.X - _sourceRect.X) * DipPerPhysicalX;
+        double dy = (physical.Y - _sourceRect.Y) * DipPerPhysicalY;
+        _pinEditor = new TextBox
+        {
+            Text = initial,
+            AcceptsReturn = true,
+            Background = new SolidColorBrush(Color.FromArgb(0x40, 0, 0, 0)),
+            Foreground = new SolidColorBrush(color),
+            BorderBrush = new SolidColorBrush(color),
+            BorderThickness = new Thickness(1, 1, 0, 0),
+            FontFamily = new FontFamily("Microsoft YaHei, Segoe UI"),
+            FontSize = fontSizePx * DipPerPhysicalY,
+            Padding = new Thickness(0),
+            MinWidth = 24,
+            MaxWidth = Math.Max(24, _imageW - dx - 2)
+        };
+        _pinEditor.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Escape) { CommitPinText(discard: true); e.Handled = true; }
+            else if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) == 0)
+            {
+                CommitPinText();
+                e.Handled = true;
+            }
+        };
+        _pinEditor.LostFocus += (_, _) => CommitPinText();
+        _root.Children.Add(_pinEditor);
+        Canvas.SetLeft(_pinEditor, dx);
+        Canvas.SetTop(_pinEditor, dy - fontSizePx * DipPerPhysicalY * 0.12);
+        _pinEditor.Focus();
+        _pinEditor.SelectAll();
+    }
+
+    private void CommitPinText(bool discard = false)
+    {
+        if (_pinEditor == null) return;
+        var editor = _pinEditor;
+        _pinEditor = null;
+        var text = editor.Text.TrimEnd('\r', '\n');
+        _root.Children.Remove(editor);
+
+        var target = _pinEditing;
+        _pinEditing = null;
+        if (target != null)
+        {
+            target.Hidden = false;   // 不管改没改成，旧字都放回来
+            if (!discard && text.Length > 0) _session.UpdateText(target, text);
+        }
+        else if (!discard && text.Length > 0)
+        {
+            _session.AddText(text, _pinTextAnchor);
+        }
+        _surface.InvalidateVisual();
+    }
+
     // ---------- 出口 ----------
 
     private void ShowToolbar(bool visible)
@@ -347,6 +464,7 @@ public sealed class PinWindow : Window
 
     public void FinishToClipboard()
     {
+        CommitPinText();
         var image = _session.RenderResult();
         Close();
         Exporter.CopyImage(image);
@@ -354,6 +472,7 @@ public sealed class PinWindow : Window
 
     public void SaveToDisk()
     {
+        CommitPinText();
         var image = _session.RenderResult();
         var saved = Exporter.SaveDialog(image, App.Config);
         if (saved != null && App.Config.CopyAfterSave) Exporter.CopyImage(image);
@@ -379,9 +498,12 @@ public sealed class PinWindow : Window
             // 先缩放后平移：绘制坐标用「虚拟桌面物理像素」，映射到窗口 DIP 是 (p-origin)*s。
             dc.PushTransform(new ScaleTransform(sx, sy));
             dc.PushTransform(new TranslateTransform(-bounds.X, -bounds.Y));
+            // 标注裁在图片区里：拖出图片的笔画不该漏到下方工具条上，导出时本来也是裁掉的。
+            dc.PushClip(new RectangleGeometry(new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height)));
             dc.DrawImage(_session.Snapshot.Image, new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height));
             if (_session.Mosaics != null)
                 _session.Layer.DrawAll(dc, new RenderContext(_session.Mosaics, sx * _owner.BaseScale, _session.Mosaics.Region));
+            dc.Pop();
             dc.Pop();
             dc.Pop();
 

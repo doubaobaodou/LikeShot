@@ -109,6 +109,17 @@ public sealed class CaptureSession
         Changed?.Invoke();
     }
 
+    /// <summary>
+    /// 把整张快照当成选区。钉图窗的会话没有「框选」这一步，但不设选区的话
+    /// 打码源建不出来、导出会直接退回原图把标注全丢掉——按全图路径走一遍就行。
+    /// </summary>
+    public void UseFullSelection()
+    {
+        Selection = Snapshot.VirtualBounds;
+        Phase = CapturePhase.Selected;
+        RebuildMosaics();
+    }
+
     public static Point CurrentPhysicalCursor()
     {
         Win32.GetCursorPos(out var p);
@@ -156,6 +167,13 @@ public sealed class CaptureSession
 
         if (button == LeftOrRight.Right)
         {
+            // 有选区时右键只用来弹菜单，不能把选区吃成自由截图的起点；
+            // 自由截图只在没有选区的状态下右键拖出来。
+            if (HasSelection)
+            {
+                RightClickWasEmpty = true;
+                return;
+            }
             PolygonPoints = [physical];
             _polygonSeed = physical;
             _drag = DragMode.Polygon;
@@ -277,8 +295,10 @@ public sealed class CaptureSession
                 RightClickWasEmpty = PolygonPoints is { Count: < 3 };
                 if (PolygonPoints is { Count: < 3 })
                 {
+                    // 没拖出形状就松手：回到未选择状态，别留一个 1×1 的洞把全屏罩暗。
                     PolygonPoints = null;
-                    if (!HasSelection) Phase = CapturePhase.Choosing;
+                    Phase = CapturePhase.Choosing;
+                    Selection = default;
                 }
                 RebuildMosaics();
                 break;
@@ -341,6 +361,13 @@ public sealed class CaptureSession
                 return true;
             }
             ExitRequested?.Invoke();
+            return true;
+        }
+
+        if (key == Key.C && ctrl && HasSelection)
+        {
+            // Ctrl+C = 完成并复制，QQ 的标配，跟放大镜的「按 C 复制色号」不冲突。
+            FinishRequested?.Invoke(new FinishRequest(CopyMode.Clipboard));
             return true;
         }
 
@@ -449,7 +476,9 @@ public sealed class CaptureSession
     {
         MosaicStrength = Math.Clamp(strength, 2, 40);
         if (_live is MosaicAnnotation liveMosaic) liveMosaic.Strength = MosaicStrength;
-        Mosaics = null;
+        // 不能把 Mosaics 置空：预览层的绘制以它是否为 null 做开关，置空会让
+        // 已经画好的所有标注一起消失，直到下一次拖动选区才回来。
+        RebuildMosaics();
         Changed?.Invoke();
     }
 
@@ -498,6 +527,10 @@ public sealed class CaptureSession
             : null;
 
         int w = (int)(bounds.Width + pad * 2), h = (int)(bounds.Height + pad * 2);
+        // CroppedBitmap 要的是位图内坐标；钉图快照的虚拟边界可能在负坐标区（副屏在左/上），
+        // 直接拿虚拟坐标裁会当场炸掉，先平移回位图原点。
+        var local = new Int32Rect(bounds.X - Snapshot.VirtualBounds.X, bounds.Y - Snapshot.VirtualBounds.Y,
+            bounds.Width, bounds.Height);
         return RenderSurface.ToBitmap(w, h, dc =>
         {
             var rect = new Rect(pad, pad, bounds.Width, bounds.Height);
@@ -507,7 +540,7 @@ public sealed class CaptureSession
 
             Geometry? clip = mask ?? round;
             if (clip != null) dc.PushClip(clip);
-            dc.DrawImage(new CroppedBitmap(Snapshot.Image, bounds), rect);
+            dc.DrawImage(new CroppedBitmap(Snapshot.Image, local), rect);
             dc.PushTransform(new TranslateTransform(-bounds.X + pad, -bounds.Y + pad));
             Layer.DrawAll(dc, new RenderContext(mosaics, 1.0, mosaics.Region));
             dc.Pop();

@@ -112,7 +112,12 @@ public sealed class CaptureOverlay : Window
     private Point ToolbarAnchor()
     {
         var s = _session.FinalRect();
-        return new Point(s.X, s.Y + s.Height + 10);
+        var below = new Point(s.X, s.Y + s.Height + 10);
+        // 选区贴着屏幕底边时锚点会落到桌面外，改取选区内部的下沿点——
+        // 工具栏跟着塞进选区里，而不是整条消失。
+        bool belowOnScreen = _session.Displays.Any(d =>
+            d.Contains((int)below.X, (int)below.Y));
+        return belowOnScreen ? below : new Point(s.X, s.Y + s.Height - 1);
     }
 
     private void OnSessionChanged()
@@ -266,16 +271,20 @@ public sealed class CaptureOverlay : Window
             return;
         }
 
-        var anchor = ToolbarAnchor();
+        var s = _session.FinalRect();
         double w = _toolbar.NaturalWidth, h = _toolbar.NaturalHeight;
-        var dip = _display.ToDip((int)anchor.X, (int)anchor.Y);
-        double top = dip.Y;
-        if (top + h > _display.Bounds.Height / _display.Scale - 4)
-        {
-            var s = _session.FinalRect();
-            top = Math.Max(4, (s.Y - _display.Bounds.Y) / _display.Scale - h - 8);
-        }
-        double left = Math.Clamp(dip.X, 4, Math.Max(4, _display.Bounds.Width / _display.Scale - w - 4));
+        double scale = _display.Scale;
+        double left = Math.Clamp((s.X - _display.Bounds.X) / scale, 4,
+            Math.Max(4, _display.Bounds.Width / scale - w - 4));
+        double maxTop = _display.Bounds.Height / scale - h - 4;
+
+        // 三个落点依次挑：选区下方 → 选区上方 → 选区内部贴下沿（贴底选区的兜底）。
+        double belowTop = (s.Y + s.Height + 10 - _display.Bounds.Y) / scale;
+        double aboveTop = (s.Y - _display.Bounds.Y) / scale - h - 8;
+        double insideTop = (s.Y + s.Height - 1 - _display.Bounds.Y) / scale - h - 8;
+        double top = belowTop + h <= maxTop ? belowTop
+            : aboveTop >= 4 ? aboveTop
+            : Math.Max(4, insideTop);
 
         Canvas.SetLeft(_toolbar, left);
         Canvas.SetTop(_toolbar, top);
@@ -456,7 +465,7 @@ public sealed class CaptureOverlay : Window
         {
             _session.AddText(text, _textAnchor);
         }
-        _session.SetTool(ToolKind.None);
+        // 不把工具弹回「无」：QQ 落完字文字工具保持选中，点一下就能继续放下一个。
     }
 
     internal void CommitPendingText() => CommitTextEditor();
@@ -516,7 +525,10 @@ public sealed class CaptureOverlay : Window
                 var mosaics = session.Mosaics;
                 if (mosaics != null)
                 {
+                    // 标注裁在选区里：画笔拖出去不该漏到暗区上，导出时本来也是裁掉的。
+                    dc.PushClip(keepGeometry);
                     session.Layer.DrawAll(dc, new RenderContext(mosaics, scale, mosaics.Region));
+                    dc.Pop();
                 }
                 DrawSelectionChrome(dc, session, scale, keep);
             }

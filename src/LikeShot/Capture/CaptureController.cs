@@ -74,6 +74,8 @@ public sealed class CaptureController
     private void OnFinish(FinishRequest request)
     {
         if (_session == null) return;
+        // 编辑框还开着就先落字：不然正打一半的字丢了，双击改字时旧字还卡在隐藏态。
+        foreach (var overlay in _overlays) overlay.CommitPendingText();
         var image = _session.RenderResult();
 
         switch (request.Mode)

@@ -751,16 +751,22 @@ public sealed class ToolbarStrip : Border
 
             bool showSub = _mode != ToolbarMode.LongCapture && _session.Tool != ToolKind.None;
             _subHost.Visibility = showSub ? Visibility.Visible : Visibility.Collapsed;
-            if (showSub)
+
+            // 换工具（含切回「无」）时把颜色下拉和取色板收起来，别让上一支工具的色板挂着。
+            if (_session.Tool != _lastTool)
             {
-                // 换工具时把颜色下拉收起来，别让上一支工具的色板挂着。
-                if (_session.Tool != _lastTool && _colorStripOpen)
+                if (_colorStripOpen)
                 {
                     _colorStripOpen = false;
                     _colorStrip.Visibility = Visibility.Collapsed;
                 }
+                if (_picker != null && _picker.Visibility == Visibility.Visible)
+                    _picker.Visibility = Visibility.Collapsed;
                 _lastTool = _session.Tool;
+            }
 
+            if (showSub)
+            {
                 foreach (var (tool, panel) in _subPanels)
                     panel.Visibility = tool == _session.Tool ? Visibility.Visible : Visibility.Collapsed;
             }
@@ -820,6 +826,4 @@ public sealed class ToolbarStrip : Border
 
     public void ToggleAutoScrollOn() => _autoScrollOn = true;
     public void ToggleAutoScrollOff() => _autoScrollOn = false;
-
-    internal void ClosePalette() => _subHost.Visibility = Visibility.Collapsed;
 }
