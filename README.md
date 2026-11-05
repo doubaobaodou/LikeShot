@@ -1,5 +1,9 @@
 # LikeShot
 
+[![下载最新版本](https://img.shields.io/github/v/release/doubaobaodou/LikeShot)](https://github.com/doubaobaodou/LikeShot/releases/latest)
+![平台](https://img.shields.io/badge/Windows-10%2F11-blue)
+[![许可](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 一个 Windows 截图工具，界面和操作逻辑照着 QQ 的截图工具做，
 但**和 QQ 共用同一个热键（Ctrl+Alt+A），并且只要 QQ 在跑就自动把热键让回去**。
 
@@ -71,6 +75,13 @@ LikeShot 全程不注册热键，改用 `WH_KEYBOARD_LL` 低级键盘钩子分�
 
 判据不是「看起来差不多」：自检会造一张每条色带颜色都唯一的可滚动页面，
 拼完逐行认色，要求识别出的序号严格递增、不重不漏。
+
+## 下载
+
+去 [Releases](https://github.com/doubaobaodou/LikeShot/releases/latest) 拿
+`...-selfcontained.zip`，解压双击 `LikeShot.exe` 就能跑（不装任何东西）；
+已经装了 .NET 8 桌面运行时的可以拿 153 KB 的 `...-portable.zip`。
+没有代码签名，首次运行 SmartScreen 会拦一下，点「仍要运行」。
 
 ## 构建
 
