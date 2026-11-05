@@ -75,4 +75,4 @@ dotnet run
 
 ## 许可
 
-MIT
+MIT。工具栏图标基于 [Lucide](https://lucide.dev)（ISC 许可）绘制。

@@ -250,10 +250,10 @@ internal sealed class ColorPickerPanel : StackPanel
 
     private Button MakePipetteButton()
     {
-        var canvas = new Canvas { Width = 15, Height = 15 };
+        var canvas = new Canvas { Width = 17, Height = 17 };
         canvas.Children.Add(new Path
         {
-            Data = Geometry.Parse("M10.2,2.2 A1.9,1.9 0 0 1 12.8,4.8 L8.6,9 L6,6.4 Z M7.1,7.5 L4.6,10 L2.6,10.6 L2,13 L4.4,12.4 L7.5,9.3"),
+            Data = Icons.Parse(Icons.StrokePaths["pipette"]),
             Stroke = Theme.Brush(Theme.IconBrush),
             StrokeThickness = 1.4,
             StrokeLineJoin = PenLineJoin.Round,

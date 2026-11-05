@@ -53,7 +53,7 @@ public static class Theme
 
     public const double ButtonSize = 30;
     public const double ButtonGap = 6;
-    public const double IconSize = 17;
+    public const double IconSize = 19;
     public const double BarPadding = 6;
     public const double LoupeWidth = 132;
     public const double LoupeImageHeight = 84;

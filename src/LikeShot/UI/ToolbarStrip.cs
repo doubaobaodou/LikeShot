@@ -172,7 +172,7 @@ public sealed class ToolbarStrip : Border
         {
             var fill = new System.Windows.Shapes.Path
             {
-                Data = Geometry.Parse(fillData),
+                Data = Icons.Parse(fillData),
                 Fill = strokeBrush,
                 Opacity = iconKey == "mosaic" ? 0.85 : 1
             };
@@ -182,7 +182,7 @@ public sealed class ToolbarStrip : Border
         {
             var path = new System.Windows.Shapes.Path
             {
-                Data = Geometry.Parse(data),
+                Data = Icons.Parse(data),
                 Stroke = strokeBrush,
                 StrokeThickness = 1.5,
                 StrokeLineJoin = PenLineJoin.Round,
@@ -645,17 +645,17 @@ public sealed class ToolbarStrip : Border
 
     private FrameworkElement MakeSubIcon(string iconKey)
     {
-        var canvas = new Canvas { Width = 15, Height = 15 };
+        var canvas = new Canvas { Width = 17, Height = 17 };
         if (Icons.FillPaths.TryGetValue(iconKey, out var fillData))
             canvas.Children.Add(new System.Windows.Shapes.Path
             {
-                Data = Geometry.Parse(fillData),
+                Data = Icons.Parse(fillData),
                 Fill = Theme.Brush(Theme.IconBrush)
             });
         if (Icons.StrokePaths.TryGetValue(iconKey, out var data))
             canvas.Children.Add(new System.Windows.Shapes.Path
             {
-                Data = Geometry.Parse(data),
+                Data = Icons.Parse(data),
                 Stroke = Theme.Brush(Theme.IconBrush),
                 StrokeThickness = 1.5,
                 StrokeLineJoin = PenLineJoin.Round,
