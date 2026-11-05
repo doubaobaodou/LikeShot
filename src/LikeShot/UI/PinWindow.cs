@@ -12,7 +12,7 @@ namespace LikeShot.UI;
 
 /// <summary>
 /// 钉在桌面上的图：置顶、无边框、可拖动、可拖边改大小、滚轮等比缩放、能继续标注。
-/// 窗口客户区就是这张图本身，所以拖边是拉伸、滚轮是等比，两者都不会让图和窗错位。
+/// 窗口分两段：上面是图本身，下面是工具条（悬停才出现）——图再小工具条也不会被裁掉。
 /// 继续标注复用整套截图层的机器：把这张图包成一个「快照」即可。
 /// </summary>
 public sealed class PinWindow : Window
@@ -25,6 +25,8 @@ public sealed class PinWindow : Window
     private readonly PinSurface _surface;
     private readonly ToolbarStrip _toolbar;
     private readonly CaptureSession _session;
+
+    private double _imageW, _imageH;   // 图片区尺寸（DIP），窗口可能比它宽/高
 
     private Grip _grip;
     private Rect _resizeStart;
@@ -84,10 +86,11 @@ public sealed class PinWindow : Window
         _session.ExitRequested += Close;
 
         // 初始大小 = 它在屏幕上原本占的那块，看起来就是「原地钉住」。
-        Width = _image.PixelWidth / _baseScale;
-        Height = _image.PixelHeight / _baseScale;
+        _imageW = _image.PixelWidth / _baseScale;
+        _imageH = _image.PixelHeight / _baseScale;
         Left = _sourceRect.X / _baseScale;
         Top = _sourceRect.Y / _baseScale;
+        ApplyWindowSize();
 
         MouseLeftButtonDown += OnLeftDown;
         MouseLeftButtonUp += OnLeftUp;
@@ -110,9 +113,13 @@ public sealed class PinWindow : Window
     public double BaseScale => _baseScale;
     public bool IsHovering => _hovering;
 
-    /// <summary>一个图片物理像素在当前窗口里占多少 DIP。拖边后 X/Y 可以不相等。</summary>
-    public double DipPerPhysicalX => ActualWidth > 0 ? ActualWidth / _image.PixelWidth : 1 / _baseScale;
-    public double DipPerPhysicalY => ActualHeight > 0 ? ActualHeight / _image.PixelHeight : 1 / _baseScale;
+    /// <summary>图片区尺寸，PinSurface 画边框用。</summary>
+    public double ImageAreaW => _imageW;
+    public double ImageAreaH => _imageH;
+
+    /// <summary>一个图片物理像素在图片区里占多少 DIP。拖边后 X/Y 可以不相等。</summary>
+    public double DipPerPhysicalX => _imageW > 0 ? _imageW / _image.PixelWidth : 1 / _baseScale;
+    public double DipPerPhysicalY => _imageH > 0 ? _imageH / _image.PixelHeight : 1 / _baseScale;
 
     public void ShowPinned()
     {
@@ -137,7 +144,8 @@ public sealed class PinWindow : Window
             return;
         }
 
-        if (_session.Tool != ToolKind.None)
+        // 画具激活时点图片区落笔；点在下方工具条区域不算。
+        if (_session.Tool != ToolKind.None && pos.X <= _imageW && pos.Y <= _imageH)
         {
             _session.PointerDown(ToPhysical(pos), LeftOrRight.Left);
             _surface.InvalidateVisual();
@@ -147,7 +155,7 @@ public sealed class PinWindow : Window
         _grip = HitGrip(pos);
         if (_grip != Grip.None)
         {
-            _resizeStart = new Rect(Left, Top, Width, Height);
+            _resizeStart = new Rect(Left, Top, _imageW, _imageH);
             _resizeAnchor = PointToScreen(pos);
             CaptureMouse();
             return;
@@ -217,26 +225,26 @@ public sealed class PinWindow : Window
     private void ZoomBy(double factor, Point anchorInWindow)
     {
         double baseW = _image.PixelWidth / _baseScale;
-        double newW = Math.Clamp(Width * factor, baseW * 0.15, baseW * 8);
-        double applied = newW / Width;
-        double newH = Math.Max(MinDip, Height * applied);
+        double newW = Math.Clamp(_imageW * factor, baseW * 0.15, baseW * 8);
+        double applied = newW / _imageW;
+        double newH = Math.Max(MinDip, _imageH * applied);
 
         // 光标在屏幕上那点不动：窗口原点按缩放量反向挪。
         double screenX = Left + anchorInWindow.X;
         double screenY = Top + anchorInWindow.Y;
 
-        Width = newW;
-        Height = newH;
+        _imageW = newW;
+        _imageH = newH;
+        ApplyWindowSize();
         Left = screenX - anchorInWindow.X * applied;
         Top = screenY - anchorInWindow.Y * applied;
 
-        ShowToolbar(_toolbar.Visibility == Visibility.Visible);
         _surface.InvalidateVisual();
     }
 
     private void ZoomTo(double target)
     {
-        double factor = target * (_image.PixelWidth / _baseScale) / Width;
+        double factor = target * (_image.PixelWidth / _baseScale) / _imageW;
         ZoomBy(factor, new Point(0, 0));
     }
 
@@ -266,20 +274,22 @@ public sealed class PinWindow : Window
             else bottom = top + h;
         }
 
+        // 拖的是图片区，窗口跟着包住图片 + 工具条。
+        _imageW = w;
+        _imageH = h;
         Left = left;
         Top = top;
-        Width = w;
-        Height = h;
-        ShowToolbar(true);
+        ApplyWindowSize();
         _surface.InvalidateVisual();
     }
 
     private Grip HitGrip(Point pos)
     {
+        // 手柄贴着图片区的边（不是窗口边——窗口比图宽的时候以图为准）。
         bool nearLeft = pos.X <= GripTolerance;
-        bool nearRight = pos.X >= ActualWidth - GripTolerance;
+        bool nearRight = Math.Abs(pos.X - _imageW) <= GripTolerance && pos.X <= _imageW + GripTolerance;
         bool nearTop = pos.Y <= GripTolerance;
-        bool nearBottom = pos.Y >= ActualHeight - GripTolerance;
+        bool nearBottom = Math.Abs(pos.Y - _imageH) <= GripTolerance && pos.Y <= _imageH + GripTolerance;
 
         if (nearLeft && nearTop) return Grip.TopLeft;
         if (nearRight && nearTop) return Grip.TopRight;
@@ -312,17 +322,27 @@ public sealed class PinWindow : Window
 
     private void ShowToolbar(bool visible)
     {
-        if (!visible)
-        {
-            _toolbar.Visibility = Visibility.Collapsed;
-            return;
-        }
+        _toolbar.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        ApplyWindowSize();
+    }
 
-        _toolbar.Visibility = Visibility.Visible;
+    /// <summary>窗口 = 图片区 + 工具条（悬停时在图片下方）；图片再窄窗口也会包住整条工具条。</summary>
+    private void ApplyWindowSize()
+    {
         _toolbar.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-        double w = _toolbar.DesiredSize.Width, h = _toolbar.DesiredSize.Height;
-        Canvas.SetLeft(_toolbar, Math.Max(2, (ActualWidth - w) / 2));
-        Canvas.SetTop(_toolbar, Math.Max(2, ActualHeight - h - 4));
+        double tw = _toolbar.DesiredSize.Width, th = _toolbar.DesiredSize.Height;
+        bool stripVisible = _toolbar.Visibility == Visibility.Visible;
+
+        _surface.Width = _imageW;
+        _surface.Height = _imageH;
+        Canvas.SetLeft(_surface, 0);
+        Canvas.SetTop(_surface, 0);
+
+        Width = Math.Max(_imageW, stripVisible ? tw + 4 : 0);
+        Height = _imageH + (stripVisible ? th + 4 : 0);
+
+        Canvas.SetLeft(_toolbar, Math.Max(2, (Width - tw) / 2));
+        Canvas.SetTop(_toolbar, _imageH + 2);
     }
 
     public void FinishToClipboard()
@@ -370,14 +390,16 @@ public sealed class PinWindow : Window
 
         private void DrawFrame(DrawingContext dc)
         {
+            // 边框和四角手柄贴着图片区画，不包含下方工具条。
+            double w = _owner.ImageAreaW, h = _owner.ImageAreaH;
             var border = new Pen(Theme.Brush(Theme.BarBorder), 1);
-            dc.DrawRectangle(null, border, new Rect(0.5, 0.5, Math.Max(1, ActualWidth - 1), Math.Max(1, ActualHeight - 1)));
+            dc.DrawRectangle(null, border, new Rect(0.5, 0.5, Math.Max(1, w - 1), Math.Max(1, h - 1)));
 
             if (!_owner.IsHovering) return;
 
             double len = 9, thick = 2.5;
             var grip = new Pen(Theme.Brush(Theme.Accent), thick) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
-            Point[] corners = [new(0, 0), new(ActualWidth, 0), new(0, ActualHeight), new(ActualWidth, ActualHeight)];
+            Point[] corners = [new(0, 0), new(w, 0), new(0, h), new(w, h)];
             foreach (var c in corners)
             {
                 double dx = c.X == 0 ? 1 : -1, dy = c.Y == 0 ? 1 : -1;
