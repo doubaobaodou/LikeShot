@@ -22,7 +22,8 @@ public static class RectExt
         foreach (var p in points)
         {
             if (first) { figure.StartPoint = p; first = false; }
-            else figure.Segments.Add(new LineSegment(p, false));
+            // 第二个参数是 isStroked：填 false 整段不描边，笔画会凭空消失
+            else figure.Segments.Add(new LineSegment(p, true));
         }
         figure.IsClosed = true;
         figure.IsFilled = true;
@@ -40,7 +41,7 @@ public static class RectExt
         foreach (var p in points)
         {
             if (first) { figure.StartPoint = p; first = false; }
-            else figure.Segments.Add(new LineSegment(p, false));
+            else figure.Segments.Add(new LineSegment(p, true));
         }
         var geo = new PathGeometry();
         geo.Figures.Add(figure);
