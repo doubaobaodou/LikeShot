@@ -388,7 +388,21 @@ public sealed class CaptureOverlay : Window
         private void DrawLoupe(DrawingContext dc, CaptureSession session, Display display, double scale)
         {
             var cursor = session.Cursor;
-            double boxW = Theme.LoupeWidth * scale;
+            var sel = session.FinalRect();
+            string sizeLine = session.HasSelection
+                ? $"{sel.Width} × {sel.Height}"
+                : $"{(int)cursor.X} , {(int)cursor.Y}";
+            var color = session.Snapshot.PixelAt((int)cursor.X, (int)cursor.Y);
+            string hex = $"#{color.R:X2}{color.G:X2}{color.B:X2}   RGB {color.R},{color.G},{color.B}";
+
+            // 132 是 QQ 的基准宽，但色值行带上 RGB 可能放不下——按最宽一行加宽，
+            // 格子尺寸只跟 boxW 走（永远 8×scale 方格），宽一点只是多看几列。
+            var sizeText = Text(dc, sizeLine, 12 * scale, Theme.LoupeText, scale);
+            var hexText = Text(dc, hex, 12 * scale, Theme.LoupeText, scale);
+            var hintText = Text(dc, "按 C 复制色号 · 右键自由截图", 11 * scale, Theme.LoupeMuted, scale);
+            double boxW = Math.Max(Theme.LoupeWidth * scale,
+                Math.Max(sizeText.Width, Math.Max(hexText.Width, hintText.Width)) + 14 * scale);
+
             double imgH = Theme.LoupeImageHeight * scale;
             double rowH = 20 * scale;
             double boxH = imgH + rowH * 3 + 10 * scale;
@@ -424,17 +438,10 @@ public sealed class CaptureOverlay : Window
             dc.DrawLine(cross, new Point(cx, y + 5 * scale), new Point(cx, y + 5 * scale + imgH));
 
             double ty = y + 8 * scale + imgH;
-            var sel = session.FinalRect();
-            string sizeLine = session.HasSelection
-                ? $"{sel.Width} × {sel.Height}"
-                : $"{(int)cursor.X} , {(int)cursor.Y}";
-            var color = session.Snapshot.PixelAt((int)cursor.X, (int)cursor.Y);
-            string hex = $"#{color.R:X2}{color.G:X2}{color.B:X2}   RGB {color.R},{color.G},{color.B}";
 
-            dc.DrawText(Text(dc, sizeLine, 12 * scale, Theme.LoupeText, scale), new Point(x + 6 * scale, ty));
-            dc.DrawText(Text(dc, hex, 12 * scale, Theme.LoupeText, scale), new Point(x + 6 * scale, ty + rowH));
-            dc.DrawText(Text(dc, "按 C 复制色号 · 右键自由截图", 11 * scale, Theme.LoupeMuted, scale),
-                new Point(x + 6 * scale, ty + rowH * 2));
+            dc.DrawText(sizeText, new Point(x + 6 * scale, ty));
+            dc.DrawText(hexText, new Point(x + 6 * scale, ty + rowH));
+            dc.DrawText(hintText, new Point(x + 6 * scale, ty + rowH * 2));
         }
     }
 }

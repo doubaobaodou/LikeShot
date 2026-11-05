@@ -430,9 +430,8 @@ public sealed class ToolbarStrip : Border
         {
             Text = "马赛克",
             FontSize = 11,
-            Foreground = Theme.Brush(Theme.IconBrush),
-            Margin = new Thickness(4, 0, 4, 0)
-        });
+            Foreground = Theme.Brush(Theme.IconBrush)
+        }, autoWidth: true);
         _pixelButton.Click += (_, _) => _session.SetMosaicStyle(MosaicStyle.Pixelate);
         row.Children.Add(_pixelButton);
 
@@ -440,9 +439,8 @@ public sealed class ToolbarStrip : Border
         {
             Text = "模糊",
             FontSize = 11,
-            Foreground = Theme.Brush(Theme.IconBrush),
-            Margin = new Thickness(4, 0, 4, 0)
-        });
+            Foreground = Theme.Brush(Theme.IconBrush)
+        }, autoWidth: true);
         _blurButton.Click += (_, _) => _session.SetMosaicStyle(MosaicStyle.Blur);
         row.Children.Add(_blurButton);
 
@@ -586,14 +584,15 @@ public sealed class ToolbarStrip : Border
         return row;
     }
 
-    /// <summary>二级条里的小按钮：26×26，图标 15×15。</summary>
-    private Button SubButton(object content)
+    /// <summary>二级条里的小按钮：图标款 26×26；文字款（马赛克/模糊）宽度跟着字走，写死会把字截掉。</summary>
+    private Button SubButton(object content, bool autoWidth = false)
     {
         var btn = new Button
         {
             Content = content,
-            Width = 26,
+            Width = autoWidth ? double.NaN : 26,
             Height = 26,
+            Padding = autoWidth ? new Thickness(6, 0, 6, 0) : new Thickness(0),
             Margin = new Thickness(1, 0, 1, 0),
             Focusable = false,
             Style = ButtonStyle(),
