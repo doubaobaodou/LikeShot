@@ -108,11 +108,17 @@ public sealed class TrayIcon : IDisposable
             if (_menu.IsOpen) { _menu.IsOpen = false; return; }
             _menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
             _menu.IsOpen = true;
+            // 从托盘弹出时没有一个被激活的宿主窗口，WPF 默认的「点菜单外面就关」
+            // 不会生效——菜单会一直挂着，只能再点一次托盘。自己把鼠标捕获拿过来，
+            // 之后任何一次菜单外的按下都会触发 MenuBase 的关单逻辑。
+            System.Windows.Input.Mouse.Capture(_menu, System.Windows.Input.CaptureMode.SubTree);
         });
     }
 
-    /// <summary>无头验证用：把菜单本体拿出来渲染。</summary>
+    /// <summary>无头验证用：把菜单本体拿出来渲染 / 按真实路径弹出。</summary>
     internal ContextMenu MenuForTest => _menu;
+
+    internal void ShowMenuForTest() => ShowMenu();
 
     private void RefreshTexts()
     {
