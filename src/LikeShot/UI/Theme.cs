@@ -42,8 +42,9 @@ public static class Theme
     public static Color LoupeMuted => LightUi
         ? Color.FromRgb(0x76, 0x76, 0x76)
         : Color.FromRgb(0x9A, 0xA3, 0xAF);
-    public static Color FinishButton => LightUi ? Accent : Color.FromRgb(0xE8, 0xEA, 0xED);
-    public static Color FinishText => LightUi ? Colors.White : Color.FromRgb(0x1F, 0x23, 0x29);
+    /// <summary>工具条尾部那对确认/取消：QQ 的 ✓ 是绿的，✕ 是红的。</summary>
+    public static readonly Color SuccessGreen = Color.FromRgb(0x0B, 0xBF, 0x5E);
+    public static readonly Color DangerRed = Color.FromRgb(0xFB, 0x38, 0x38);
 
     /// <summary>色板上未选中色块的描边：深色带里描白，白色带里描灰，否则白色块就隐形了。</summary>
     public static Color SwatchBorder => LightUi
@@ -56,8 +57,6 @@ public static class Theme
     public const double BarPadding = 6;
     public const double LoupeWidth = 132;
     public const double LoupeImageHeight = 84;
-    public const double FinishButtonWidth = 56;
-    public const double FinishButtonHeight = 18;
 
     /// <summary>QQ 调色板 16 色（含「当前色」），十六进制直接来自它的 UI 定义。</summary>
     public static readonly (string Name, Color Color)[] Palette =
@@ -81,9 +80,6 @@ public static class Theme
     ];
 
     public static readonly Color DefaultAnnotationColor = Color.FromRgb(0xFB, 0x38, 0x38);
-
-    /// <summary>三档笔宽，对应 QQ 的 SinglePoint / line_weight_3 / line_weight_5。</summary>
-    public static int[] WidthsAt(double scale) => [Math.Max(1, (int)Math.Round(2 * scale)), (int)Math.Round(4 * scale), (int)Math.Round(7 * scale)];
 
     public static int[] FontSizesAt(double scale) => [(int)Math.Round(16 * scale), (int)Math.Round(22 * scale), (int)Math.Round(30 * scale)];
 

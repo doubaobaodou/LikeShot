@@ -25,7 +25,6 @@ public sealed class CaptureSession
         UiScale = uiScale;
         Layer = new AnnotationLayer();
         Cursor = CurrentPhysicalCursor();
-        WidthIndex = 1;
         Color = Theme.DefaultAnnotationColor;
     }
 
@@ -41,7 +40,12 @@ public sealed class CaptureSession
 
     public ToolKind Tool { get; private set; } = ToolKind.None;
     public Color Color { get; private set; }
-    public int WidthIndex { get; private set; }
+    public ShapeKind ShapeCurrent { get; private set; } = ShapeKind.Rect;
+    public bool ShapeFilled { get; private set; }
+
+    /// <summary>线宽按 96dpi 的像素记，落笔时乘 UiScale——滑条上显示的数字就是它。</summary>
+    public int WidthDp { get; private set; } = 4;
+    public int FontIndex { get; private set; } = 1;
     public MosaicStyle MosaicKind { get; private set; } = MosaicStyle.Pixelate;
     public int MosaicStrength { get; private set; } = 10;
 
@@ -69,8 +73,8 @@ public sealed class CaptureSession
 
     private enum DragMode { None, NewRect, MoveRect, ResizeRect, Stroke, SizingShape, Polygon }
 
-    public int StrokeWidth => Theme.WidthsAt(UiScale)[Math.Clamp(WidthIndex, 0, 2)];
-    public int FontSize => Theme.FontSizesAt(UiScale)[Math.Clamp(WidthIndex, 0, 2)];
+    public int StrokeWidth => (int)Math.Round(WidthDp * UiScale);
+    public int FontSize => Theme.FontSizesAt(UiScale)[Math.Clamp(FontIndex, 0, 2)];
     public int BadgeRadius => Theme.BadgeRadiusAt(UiScale);
 
     public bool HasSelection => Phase == CapturePhase.Selected;
@@ -337,14 +341,45 @@ public sealed class CaptureSession
     {
         Color = color;
         if (_live != null) _live.Color = color;
+        ApplyLiveFill();
         Changed?.Invoke();
     }
 
-    public void SetWidthIndex(int index)
+    public void SetShapeKind(ShapeKind kind)
     {
-        WidthIndex = Math.Clamp(index, 0, 2);
+        ShapeCurrent = kind;
+        Changed?.Invoke();
+    }
+
+    public void SetShapeFilled(bool filled)
+    {
+        ShapeFilled = filled;
+        ApplyLiveFill();
+        Changed?.Invoke();
+    }
+
+    public void SetStrokeWidth(int dp)
+    {
+        WidthDp = Math.Clamp(dp, 1, 20);
         if (_live != null) _live.StrokeWidth = StrokeWidth;
         Changed?.Invoke();
+    }
+
+    public void SetFontIndex(int index)
+    {
+        FontIndex = Math.Clamp(index, 0, 2);
+        Changed?.Invoke();
+    }
+
+    /// <summary>实心/空心切换和换色时，正在拖的那一笔也要跟着变。</summary>
+    private void ApplyLiveFill()
+    {
+        var fill = ShapeFilled ? Color : Colors.Transparent;
+        switch (_live)
+        {
+            case RectAnnotation r: r.FillColor = fill; break;
+            case EllipseAnnotation e: e.FillColor = fill; break;
+        }
     }
 
     public void SetMosaicStyle(MosaicStyle style)
@@ -423,13 +458,18 @@ public sealed class CaptureSession
 
         switch (Tool)
         {
-            case ToolKind.Rect:
+            case ToolKind.Shape when ShapeCurrent == ShapeKind.Rect:
                 _live = new RectAnnotation(new Int32Rect((int)physical.X, (int)physical.Y, 1, 1), Color, StrokeWidth)
-                { FillColor = Colors.Transparent };
+                { FillColor = ShapeFilled ? Color : Colors.Transparent };
                 _drag = DragMode.SizingShape;
                 break;
-            case ToolKind.Ellipse:
-                _live = new EllipseAnnotation(new Int32Rect((int)physical.X, (int)physical.Y, 1, 1), Color, StrokeWidth);
+            case ToolKind.Shape when ShapeCurrent == ShapeKind.Ellipse:
+                _live = new EllipseAnnotation(new Int32Rect((int)physical.X, (int)physical.Y, 1, 1), Color, StrokeWidth)
+                { FillColor = ShapeFilled ? Color : Colors.Transparent };
+                _drag = DragMode.SizingShape;
+                break;
+            case ToolKind.Shape:
+                _live = new LineAnnotation(physical, physical, Color, StrokeWidth);
                 _drag = DragMode.SizingShape;
                 break;
             case ToolKind.Arrow:
@@ -474,6 +514,7 @@ public sealed class CaptureSession
         {
             case RectAnnotation r: r.Box = RectFrom(_shapeAnchor, physical); break;
             case EllipseAnnotation e: e.Box = RectFrom(_shapeAnchor, physical); break;
+            case LineAnnotation l: l.To = physical; break;
             case ArrowAnnotation a: a.To = physical; break;
             case MosaicAnnotation m:
                 if (m.AsRectangle) m.RectBox = RectFrom(_shapeAnchor, physical);

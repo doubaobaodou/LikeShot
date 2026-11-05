@@ -49,7 +49,8 @@ public static class SelfTest
             log.AppendLine($"selection={session.FinalRect().Width}x{session.FinalRect().Height} phase={session.Phase}");
 
             // 2) 标注：矩形 + 箭头 + 画笔 + 马赛克 + 序号
-            session.SetTool(ToolKind.Rect);
+            session.SetTool(ToolKind.Shape);
+            session.SetShapeKind(ShapeKind.Rect);
             session.PointerDown(new Point(ox + 20, oy + 20), LeftOrRight.Left);
             session.PointerMove(new Point(ox + 120, oy + 70));
             session.PointerUp(new Point(ox + 120, oy + 70));
@@ -78,8 +79,9 @@ public static class SelfTest
             // 换色换粗再画一笔：标注必须带上，不然主构造函数的参数就是悄悄丢掉的。
             var probe = Color.FromRgb(0x00, 0xC8, 0x00);
             session.SetColor(probe);
-            session.SetWidthIndex(2);
-            session.SetTool(ToolKind.Ellipse);
+            session.SetStrokeWidth(7);
+            session.SetTool(ToolKind.Shape);
+            session.SetShapeKind(ShapeKind.Ellipse);
             session.PointerDown(new Point(ox + 170, oy + 150), LeftOrRight.Left);
             session.PointerMove(new Point(ox + 220, oy + 185));
             session.PointerUp(new Point(ox + 220, oy + 185));

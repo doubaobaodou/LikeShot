@@ -4,7 +4,11 @@ using System.Windows.Media.Imaging;
 
 namespace LikeShot.Drawing;
 
-public enum ToolKind { None, Rect, Ellipse, Arrow, Brush, Mosaic, Text, Marker }
+/// <summary>绘图工具。矩形/椭圆/直线在 QQ 里是同一个「形状」工具的三档变体。</summary>
+public enum ToolKind { None, Shape, Arrow, Brush, Mosaic, Text, Marker }
+
+/// <summary>形状工具的变体。</summary>
+public enum ShapeKind { Rect, Ellipse, Line }
 
 public enum MosaicStyle { Pixelate, Blur }
 
@@ -65,12 +69,15 @@ public sealed class RectAnnotation(Int32Rect box, Color color, int width) : Anno
 public sealed class EllipseAnnotation(Int32Rect box, Color color, int width) : Annotation(color, width)
 {
     public Int32Rect Box { get; set; } = box;
+    public Color FillColor { get; set; } = Colors.Transparent;
 
     public override void Draw(DrawingContext dc, RenderContext ctx)
     {
         var rect = RectAnnotation.ToRect(Box);
-        dc.DrawEllipse(null, MakePen(new SolidColorBrush(Color)),
-            new Point(rect.X + rect.Width / 2, rect.Y + rect.Height / 2),
+        var center = new Point(rect.X + rect.Width / 2, rect.Y + rect.Height / 2);
+        if (FillColor.A != 0) dc.DrawEllipse(new SolidColorBrush(FillColor), null, center,
+            Math.Abs(rect.Width / 2), Math.Abs(rect.Height / 2));
+        dc.DrawEllipse(null, MakePen(new SolidColorBrush(Color)), center,
             Math.Abs(rect.Width / 2), Math.Abs(rect.Height / 2));
     }
 }
@@ -121,6 +128,18 @@ public sealed class StrokeAnnotation(Color color, int width) : Annotation(color,
         }
         if (Points.Count < 2) return;
         dc.DrawPolyline(MakePen(new SolidColorBrush(Color)), Points);
+    }
+}
+
+/// <summary>直线：形状工具的第三档，就是一根不带箭头的线。</summary>
+public sealed class LineAnnotation(Point from, Point to, Color color, int width) : Annotation(color, width)
+{
+    public Point From { get; set; } = from;
+    public Point To { get; set; } = to;
+
+    public override void Draw(DrawingContext dc, RenderContext ctx)
+    {
+        dc.DrawLine(MakePen(new SolidColorBrush(Color), capRound: false), From, To);
     }
 }
 
