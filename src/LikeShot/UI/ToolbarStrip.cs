@@ -28,18 +28,19 @@ public sealed class ToolbarStrip : Border
     private readonly Dictionary<ToolKind, Button> _toolButtons = new();
     private readonly Dictionary<ToolKind, FrameworkElement> _subPanels = new();
 
-    // 各面板里的活控件，SyncState 要跟着会话状态刷
+    // 各面板里的活控件，SyncState 要跟着会话状态刷。
+    // 粗细滑条和颜色小方块在好几个面板里各有一份，全部收进列表统一刷新，
+    // 只记最后一个的话，切了工具屏幕上就是陈旧值。
     private readonly Dictionary<ShapeKind, Button> _shapeButtons = new();
     private Button? _outlineButton;
     private Button? _filledButton;
-    private Slider? _widthSlider;
-    private TextBlock? _widthValue;
+    private readonly List<Slider> _widthSliders = [];
+    private readonly List<TextBlock> _widthValues = [];
     private readonly List<(int Index, Button Button)> _fontButtons = [];
     private Button? _pixelButton;
     private Button? _blurButton;
     private Slider? _mosaicSlider;
-    private Button? _colorButton;
-    private Border? _colorSwatch;
+    private readonly List<Border> _colorSwatches = [];
     private readonly List<(Color Color, Button Button)> _colorButtons = [];
     private StackPanel _colorStrip = new();
     private bool _colorStripOpen;
@@ -311,7 +312,7 @@ public sealed class ToolbarStrip : Border
         _subPanels[ToolKind.Shape] = BuildShapePanel();
         _subPanels[ToolKind.Arrow] = BuildWidthPanel();
         _subPanels[ToolKind.Brush] = BuildWidthPanel();
-        _subPanels[ToolKind.Marker] = BuildWidthPanel();
+        _subPanels[ToolKind.Marker] = BuildColorOnlyPanel();   // 序号牌尺寸固定，粗细滑条对它没意义
         _subPanels[ToolKind.Text] = BuildTextPanel();
         _subPanels[ToolKind.Mosaic] = BuildMosaicPanel();
 
@@ -369,12 +370,28 @@ public sealed class ToolbarStrip : Border
         return WrapPanel(row);
     }
 
-    /// <summary>箭头/画笔/序号笔共用：粗细滑条 + 颜色下拉。</summary>
+    /// <summary>箭头/画笔共用：粗细滑条 + 颜色下拉。</summary>
     private FrameworkElement BuildWidthPanel()
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal };
         row.Children.Add(WidthSlider());
         row.Children.Add(SubSeparator());
+        row.Children.Add(ColorButton());
+        return WrapPanel(row);
+    }
+
+    /// <summary>只有颜色可调的画具（序号笔）。</summary>
+    private FrameworkElement BuildColorOnlyPanel()
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(new TextBlock
+        {
+            Text = "颜色",
+            FontSize = 11,
+            Foreground = Theme.Brush(Theme.LoupeMuted),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 6, 0)
+        });
         row.Children.Add(ColorButton());
         return WrapPanel(row);
     }
@@ -466,7 +483,7 @@ public sealed class ToolbarStrip : Border
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 6, 0)
         });
-        _widthSlider = new Slider
+        var slider = new Slider
         {
             Minimum = 1,
             Maximum = 20,
@@ -477,9 +494,11 @@ public sealed class ToolbarStrip : Border
             ToolTip = "线条粗细",
             Style = SliderStyle()
         };
-        _widthSlider.ValueChanged += (_, e) => _session.SetStrokeWidth((int)Math.Round(e.NewValue));
-        row.Children.Add(_widthSlider);
-        _widthValue = new TextBlock
+        slider.ValueChanged += (_, e) =>
+            _session.SetStrokeWidth((int)Math.Round(e.NewValue, MidpointRounding.AwayFromZero));
+        _widthSliders.Add(slider);
+        row.Children.Add(slider);
+        var value = new TextBlock
         {
             Text = _session.WidthDp.ToString(),
             FontSize = 11.5,
@@ -489,14 +508,15 @@ public sealed class ToolbarStrip : Border
             TextAlignment = TextAlignment.Center,
             Margin = new Thickness(6, 0, 0, 0)
         };
-        row.Children.Add(_widthValue);
+        _widthValues.Add(value);
+        row.Children.Add(value);
         return row;
     }
 
-    /// <summary>颜色下拉：当前色的小方块，点开才铺开 16 色色板。</summary>
+    /// <summary>颜色下拉：当前色的小方块，点开才铺开 16 色色板。每个面板各一份，颜色统一刷。</summary>
     private FrameworkElement ColorButton()
     {
-        _colorSwatch = new Border
+        var swatch = new Border
         {
             Width = 14,
             Height = 14,
@@ -505,6 +525,7 @@ public sealed class ToolbarStrip : Border
             BorderBrush = Theme.Brush(Theme.SwatchBorder),
             BorderThickness = new Thickness(1)
         };
+        _colorSwatches.Add(swatch);
         var chev = new System.Windows.Shapes.Path
         {
             Data = Geometry.Parse("M0,0 L5,0 L2.5,3.4 Z"),
@@ -513,10 +534,10 @@ public sealed class ToolbarStrip : Border
             Margin = new Thickness(4, 1, 0, 0)
         };
         var content = new StackPanel { Orientation = Orientation.Horizontal };
-        content.Children.Add(_colorSwatch);
+        content.Children.Add(swatch);
         content.Children.Add(chev);
 
-        _colorButton = new Button
+        var colorButton = new Button
         {
             Content = content,
             Height = 24,
@@ -527,12 +548,12 @@ public sealed class ToolbarStrip : Border
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0)
         };
-        _colorButton.Click += (_, _) =>
+        colorButton.Click += (_, _) =>
         {
             _colorStripOpen = !_colorStripOpen;
             _colorStrip.Visibility = _colorStripOpen ? Visibility.Visible : Visibility.Collapsed;
         };
-        return _colorButton;
+        return colorButton;
     }
 
     private StackPanel BuildColorStrip()
@@ -706,14 +727,28 @@ public sealed class ToolbarStrip : Border
 
             foreach (var (kind, btn) in _shapeButtons)
                 btn.Background = kind == _session.ShapeCurrent ? Theme.Brush(Theme.ButtonPushed) : Brushes.Transparent;
+            bool linePicked = _session.ShapeCurrent == ShapeKind.Line;
             if (_outlineButton != null)
-                _outlineButton.Background = !_session.ShapeFilled ? Theme.Brush(Theme.ButtonPushed) : Brushes.Transparent;
+            {
+                // 直线没有空心实心可言，把这两档藏起来，免得点了没反应。
+                _outlineButton.Visibility = linePicked ? Visibility.Collapsed : Visibility.Visible;
+                _outlineButton.Background = !_session.ShapeFilled && !linePicked ? Theme.Brush(Theme.ButtonPushed) : Brushes.Transparent;
+            }
             if (_filledButton != null)
-                _filledButton.Background = _session.ShapeFilled ? Theme.Brush(Theme.ButtonPushed) : Brushes.Transparent;
+            {
+                _filledButton.Visibility = linePicked ? Visibility.Collapsed : Visibility.Visible;
+                _filledButton.Background = _session.ShapeFilled && !linePicked ? Theme.Brush(Theme.ButtonPushed) : Brushes.Transparent;
+            }
 
-            if (_widthSlider != null && Math.Abs(_widthSlider.Value - _session.WidthDp) > 0.4)
-                _widthSlider.Value = _session.WidthDp;
-            if (_widthValue != null) _widthValue.Text = _session.WidthDp.ToString();
+            foreach (var slider in _widthSliders)
+            {
+                // 拖动中 session 的取整值和滑条小数位置本来就对不上，
+                // 只有四舍五入后还不同（别的路径改了粗细）才回写，不然滑块会跟手打架。
+                if ((int)Math.Round(slider.Value, MidpointRounding.AwayFromZero) != _session.WidthDp)
+                    slider.Value = _session.WidthDp;
+            }
+            foreach (var value in _widthValues)
+                value.Text = _session.WidthDp.ToString();
 
             foreach (var (index, btn) in _fontButtons)
                 btn.Background = index == _session.FontIndex ? Theme.Brush(Theme.ButtonPushed) : Brushes.Transparent;
@@ -725,10 +760,10 @@ public sealed class ToolbarStrip : Border
             if (_mosaicSlider != null && _session.MosaicStrength != (int)_mosaicSlider.Value)
                 _mosaicSlider.Value = _session.MosaicStrength;
 
-            if (_colorSwatch != null)
+            foreach (var swatch in _colorSwatches)
             {
-                _colorSwatch.Background = Theme.Brush(_session.Color);
-                _colorSwatch.BorderBrush = Theme.Brush(Theme.SwatchBorder);
+                swatch.Background = Theme.Brush(_session.Color);
+                swatch.BorderBrush = Theme.Brush(Theme.SwatchBorder);
             }
             foreach (var (color, btn) in _colorButtons)
                 btn.BorderBrush = color == _session.Color ? Theme.Brush(Theme.Accent) : Theme.Brush(Theme.SwatchBorder);
