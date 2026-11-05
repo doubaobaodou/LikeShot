@@ -20,6 +20,18 @@ public abstract class Annotation
     public Color Color { get; set; } = Colors.Red;
     public int StrokeWidth { get; set; } = 4;
 
+    protected Annotation() { }
+
+    /// <summary>子类主构造函数收到的颜色/粗细必须走这里落到属性上，
+    /// 否则就一直是默认的红细线——SetColor 的实时补丁补的也是这两个属性。</summary>
+    protected Annotation(Color color, int width)
+    {
+        Color = color;
+        StrokeWidth = width;
+    }
+
+    protected Annotation(Color color) => Color = color;
+
     public abstract void Draw(DrawingContext dc, RenderContext ctx);
 
     protected Pen MakePen(Brush brush, bool capRound = true)
@@ -35,7 +47,7 @@ public abstract class Annotation
     }
 }
 
-public sealed class RectAnnotation(Int32Rect box, Color color, int width) : Annotation
+public sealed class RectAnnotation(Int32Rect box, Color color, int width) : Annotation(color, width)
 {
     public Int32Rect Box { get; set; } = box;
     public Color FillColor { get; set; } = Colors.Transparent;
@@ -50,7 +62,7 @@ public sealed class RectAnnotation(Int32Rect box, Color color, int width) : Anno
     internal static Rect ToRect(Int32Rect r) => new(r.X, r.Y, Math.Max(0, r.Width), Math.Max(0, r.Height));
 }
 
-public sealed class EllipseAnnotation(Int32Rect box, Color color, int width) : Annotation
+public sealed class EllipseAnnotation(Int32Rect box, Color color, int width) : Annotation(color, width)
 {
     public Int32Rect Box { get; set; } = box;
 
@@ -63,7 +75,7 @@ public sealed class EllipseAnnotation(Int32Rect box, Color color, int width) : A
     }
 }
 
-public sealed class ArrowAnnotation(Point from, Point to, Color color, int width) : Annotation
+public sealed class ArrowAnnotation(Point from, Point to, Color color, int width) : Annotation(color, width)
 {
     public Point From { get; set; } = from;
     public Point To { get; set; } = to;
@@ -76,9 +88,9 @@ public sealed class ArrowAnnotation(Point from, Point to, Color color, int width
         double length = vector.Length;
         if (length < 1) return;
 
-        Point headBase = To - vector / length * Math.Min(18 + width * 2, length);
+        Point headBase = To - vector / length * Math.Min(18 + StrokeWidth * 2, length);
         var perpendicular = new Vector(-vector.Y, vector.X);
-        double headWidth = 9 + width * 1.4;
+        double headWidth = 9 + StrokeWidth * 1.4;
         perpendicular.Normalize();
         Point left = headBase + perpendicular * headWidth / 2;
         Point right = headBase - perpendicular * headWidth / 2;
@@ -96,7 +108,7 @@ public sealed class ArrowAnnotation(Point from, Point to, Color color, int width
     }
 }
 
-public sealed class StrokeAnnotation(Color color, int width) : Annotation
+public sealed class StrokeAnnotation(Color color, int width) : Annotation(color, width)
 {
     public List<Point> Points { get; } = [];
 
@@ -104,7 +116,7 @@ public sealed class StrokeAnnotation(Color color, int width) : Annotation
     {
         if (Points.Count == 1)
         {
-            dc.DrawEllipse(new SolidColorBrush(Color), null, Points[0], width / 2.0, width / 2.0);
+            dc.DrawEllipse(new SolidColorBrush(Color), null, Points[0], StrokeWidth / 2.0, StrokeWidth / 2.0);
             return;
         }
         if (Points.Count < 2) return;
@@ -150,7 +162,7 @@ public sealed class MosaicAnnotation(MosaicStyle style, int strength) : Annotati
     }
 }
 
-public sealed class TextAnnotation(string text, Point position, Color color, int fontSize) : Annotation
+public sealed class TextAnnotation(string text, Point position, Color color, int fontSize) : Annotation(color)
 {
     public string Text { get; set; } = text;
     public Point Position { get; set; } = position;
@@ -176,7 +188,7 @@ public sealed class TextAnnotation(string text, Point position, Color color, int
 }
 
 /// <summary>序号笔：QQ 里点一下就落下一个自增圆牌。</summary>
-public sealed class BadgeAnnotation(int number, Point center, Color color, int radiusPx) : Annotation
+public sealed class BadgeAnnotation(int number, Point center, Color color, int radiusPx) : Annotation(color)
 {
     public int Number { get; set; } = number;
     public Point Center { get; set; } = center;

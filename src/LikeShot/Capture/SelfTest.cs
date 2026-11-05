@@ -75,6 +75,18 @@ public static class SelfTest
             session.PointerDown(new Point(ox + 80, oy + 90), LeftOrRight.Left);
             session.PointerUp(new Point(ox + 80, oy + 90));
 
+            // 换色换粗再画一笔：标注必须带上，不然主构造函数的参数就是悄悄丢掉的。
+            var probe = Color.FromRgb(0x00, 0xC8, 0x00);
+            session.SetColor(probe);
+            session.SetWidthIndex(2);
+            session.SetTool(ToolKind.Ellipse);
+            session.PointerDown(new Point(ox + 170, oy + 150), LeftOrRight.Left);
+            session.PointerMove(new Point(ox + 220, oy + 185));
+            session.PointerUp(new Point(ox + 220, oy + 185));
+            var last = session.Layer.Items[^1];
+            log.AppendLine($"颜色粗细回环：{last.GetType().Name} color={last.Color} width={last.StrokeWidth} " +
+                           $"（应为 {probe} / {session.StrokeWidth}，不符就是标注没接住参数）");
+
             session.SetTool(ToolKind.None);
             log.AppendLine($"annotations={session.Layer.Items.Count} badges={session.Layer.NextBadgeNumber - 1}");
 
