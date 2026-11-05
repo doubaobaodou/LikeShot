@@ -9,14 +9,16 @@ namespace LikeShot.UI;
 /// </summary>
 public static class Icons
 {
-    /// <summary>24 视框 → 17 画布的统一缩放。</summary>
+    /// <summary>24 视框 → 17 画布的统一缩放；托盘菜单等小图用 16。</summary>
     public const double BoxSize = 24;
 
-    internal static Geometry Parse(string data)
+    internal static Geometry Parse(string data) => Parse(data, Theme.IconSize);
+
+    internal static Geometry Parse(string data, double box)
     {
         // Geometry.Parse 返回的是冻结几何体，先拷贝成可写的才能挂缩放变换。
         var g = PathGeometry.CreateFromGeometry(Geometry.Parse(data));
-        g.Transform = new ScaleTransform(19 / BoxSize, 19 / BoxSize);
+        g.Transform = new ScaleTransform(box / BoxSize, box / BoxSize);
         g.Freeze();
         return g;
     }
@@ -61,7 +63,12 @@ public static class Icons
         // Lucide: check（完成按钮的绿勾）
         ["finish"] = "M20,6 9,17 4,12",
         // Lucide: pipette（取色板里的吸管）
-        ["pipette"] = "M12,9 3.586,17.414 A2,2 0 0 0 3,18.828 V20.172 A2,2 0 0 1 2.414,21.586 A2,2 0 0 1 3.828,21 H5.172 A2,2 0 0 0 6.586,20.414 L15,12 M18,9 18.4,9.4 A1,1 0 1 1 15.4,12.4 L11.6,8.6 A1,1 0 1 1 14.6,5.6 L15,6 18.4,2.6 A1,1 0 1 1 21.4,5.6 Z M2,22 2.414,21.586"
+        ["pipette"] = "M12,9 3.586,17.414 A2,2 0 0 0 3,18.828 V20.172 A2,2 0 0 1 2.414,21.586 A2,2 0 0 1 3.828,21 H5.172 A2,2 0 0 0 6.586,20.414 L15,12 M18,9 18.4,9.4 A1,1 0 1 1 15.4,12.4 L11.6,8.6 A1,1 0 1 1 14.6,5.6 L15,6 18.4,2.6 A1,1 0 1 1 21.4,5.6 Z M2,22 2.414,21.586",
+        // 托盘菜单的几个入口（Lucide: camera / settings / folder / power）
+        ["camera"] = "M14.5,4 H9.5 L7,7 H4 A2,2 0 0 0 2,9 V18 A2,2 0 0 0 4,20 H20 A2,2 0 0 0 22,18 V9 A2,2 0 0 0 20,7 H17 L14.5,4 Z M12,10 A3,3 0 1 0 12.01,10 Z",
+        ["gear"] = "M12.22,2 H11.78 A2,2 0 0 0 9.78,4 V4.18 A2,2 0 0 1 8.78,5.91 L8.35,6.16 A2,2 0 0 1 6.35,6.16 L6.2,6.08 A2,2 0 0 0 3.47,6.81 L3.25,7.19 A2,2 0 0 0 3.98,9.92 L4.13,10.02 A2,2 0 0 1 5.13,11.74 V12.24 A2,2 0 0 1 4.13,13.98 L3.98,14.07 A2,2 0 0 0 3.25,16.8 L3.47,17.18 A2,2 0 0 0 6.2,17.91 L6.35,17.83 A2,2 0 0 1 8.35,17.83 L8.78,18.08 A2,2 0 0 1 9.78,19.81 V20 A2,2 0 0 0 11.78,22 H12.22 A2,2 0 0 0 14.22,20 V19.82 A2,2 0 0 1 15.22,18.09 L15.65,17.84 A2,2 0 0 1 17.65,17.84 L17.8,17.92 A2,2 0 0 0 20.53,17.19 L20.75,16.8 A2,2 0 0 0 20.02,14.07 L19.87,13.98 A2,2 0 0 1 18.87,12.24 V11.74 A2,2 0 0 1 19.87,10 L20.02,9.91 A2,2 0 0 0 20.75,7.18 L20.53,6.8 A2,2 0 0 0 17.8,6.07 L17.65,6.15 A2,2 0 0 1 15.65,6.15 L15.22,5.9 A2,2 0 0 1 14.22,4.17 V4 A2,2 0 0 0 12.22,2 Z M12,9 A3,3 0 1 0 12.01,9 Z",
+        ["folder"] = "M20,20 A2,2 0 0 0 22,18 V8 A2,2 0 0 0 20,6 H12.1 A2,2 0 0 1 10.41,5.1 L9.6,3.9 A2,2 0 0 0 7.93,3 H4 A2,2 0 0 0 2,5 V18 A2,2 0 0 0 4,20 Z",
+        ["power"] = "M18.36,6.64 A9,9 0 1 1 5.64,6.64 M12,2 V12"
     };
 
     public static readonly Dictionary<string, string> FillPaths = new()
