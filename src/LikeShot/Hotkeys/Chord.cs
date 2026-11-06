@@ -90,8 +90,8 @@ internal static class ChordProbe
     }
 
     /// <summary>
-    /// 给设置界面用的那句「这个键按下去会是谁」。判定口径和仲裁器完全一条：
-    /// 让位进程活着就绝不试探，只有它不在跑才注册一下看看。
+    /// 给设置界面用的那句「这个键按下去会是谁」。判定口径和仲裁器一致：
+    /// 让位进程活着先给它；它连着几次都没接，才改由我们接管。它不在跑才注册一下看看。
     /// </summary>
     public static (bool Attention, string Text) Describe(Chord chord, IEnumerable<string> yieldNames)
     {
@@ -99,7 +99,7 @@ internal static class ChordProbe
         {
             if (string.IsNullOrWhiteSpace(name)) continue;
             if (System.Diagnostics.Process.GetProcessesByName(name.Trim()).Length == 0) continue;
-            return (true, $"{name} 正在运行：按 {chord.Text} 先给 {name}，我们不动它");
+            return (true, $"{name} 正在运行：按 {chord.Text} 先给 {name}；{name} 连着几次都没接（比如它的截图热键被关了），就改由我们截图");
         }
 
         return IsFree(chord)

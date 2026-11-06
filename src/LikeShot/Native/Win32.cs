@@ -122,9 +122,24 @@ internal static class Win32
 
     [DllImport("user32.dll")]
     public static extern nint GetForegroundWindow();
-
     [DllImport("user32.dll")]
     public static extern uint GetWindowThreadProcessId(nint hWnd, out uint processId);
+
+    public delegate void WinEventProc(nint hook, uint eventType, nint hWnd, int idObject, int idChild, uint threadId, uint eventTime);
+
+    /// <summary>
+    /// 系统级事件回调。Out-of-context 模式下回调打在安装钩子的那个线程上，
+    /// 所以必须由有消息泵的线程（我们的 UI 线程）安装。
+    /// </summary>
+    [DllImport("user32.dll")]
+    public static extern nint SetWinEventHook(uint eventMin, uint eventMax, nint module, WinEventProc callback,
+        uint processId, uint threadId, uint flags);
+
+    [DllImport("user32.dll")]
+    public static extern bool UnhookWinEvent(nint hook);
+
+    public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+    public const uint WINEVENT_OUTOFCONTEXT = 0x0000;
 
     [DllImport("user32.dll")]
     public static extern bool IsWindowVisible(nint hWnd);
