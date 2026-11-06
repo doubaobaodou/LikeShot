@@ -331,6 +331,14 @@ public static class SelfTest
             log.AppendLine($"入库：条目={(first == null ? "没有（不对）" : "有")} 原图在盘={(first != null && File.Exists(store.FullPathOf(first)))} " +
                            $"缩略图={thumb?.PixelWidth}x{thumb?.PixelHeight}（长边应 ≤420）");
 
+            // 1.5) 入库后的自动收摊：AddLater 后面排的那次压堆必须真的跟着入库跑，
+            //      不然每截一张漏几十 MB，内存越截越高。截图层开着时收尾会主动跳过，
+            //      所以历史页这段流程里它必须跑成。
+            int settlesBefore = CaptureController.SettlesForTest;
+            store.AddLater(MakeTestImage(320, 200, Color.FromRgb(5, 6, 7)), HistoryStore.SourceCapture);
+            FlushIdle();
+            log.AppendLine($"入库收摊：{(CaptureController.SettlesForTest == settlesBefore + 1 ? "跟着入库跑了" : "没跑（不对）")}");
+
             // 2) 淘汰：连灌过上限，收藏的那张必须活着。
             //    注意上限是「每次入库都当场兑现」的，所以要挑一张此刻还在库里的最旧的去收藏，
             //    不能拿最早灌进去的那张——它很可能早就被自己的上限挤掉了。

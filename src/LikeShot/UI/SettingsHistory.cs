@@ -45,8 +45,13 @@ public sealed partial class SettingsWindow
     private UIElement BuildHistoryPage()
     {
         // 命名处理器：窗口关掉时要退订，否则关掉的窗连同整页图库一起留在托管堆里。
+        // 缓存的缩略图也只伺候这一页，关窗就清——下次打开重新解码，几十毫秒的事。
         HistoryStore.Shared.Changed += OnHistoryStoreChanged;
-        Closed += (_, _) => HistoryStore.Shared.Changed -= OnHistoryStoreChanged;
+        Closed += (_, _) =>
+        {
+            HistoryStore.Shared.Changed -= OnHistoryStoreChanged;
+            HistoryStore.Shared.ClearThumbCache();
+        };
         PreviewKeyDown += OnHistoryKeyDown;
         _historySource.Select("全部");
 

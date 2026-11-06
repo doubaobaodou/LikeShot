@@ -40,6 +40,7 @@ public static class Exporter
             {
                 Clipboard.Clear();
                 Clipboard.SetImage(image);
+                FlushClipboard();
                 return null;
             }
             catch (Exception ex)
@@ -50,6 +51,18 @@ public static class Exporter
         }
         Log.Error("复制到剪贴板失败", last!);
         return Reason(last!);
+    }
+
+    /// <summary>
+    /// SetImage 是延迟渲染：数据留在我们进程里当剪贴板所有者，谁贴一次我们画一次，
+    /// 最后那张成品图就一直被扣在内存里。Flush 把数据转成交给系统保管的那份，
+    /// 我们这边马上就能释放——顺带剪贴板里的图也不会随我们退出而丢。
+    /// 代价是当场多转一次位图，几十毫秒，复制这一下本来就重。
+    /// </summary>
+    private static void FlushClipboard()
+    {
+        try { Clipboard.Flush(); }
+        catch (Exception ex) { Log.Error("剪贴板 Flush 失败（不影响复制结果）", ex); }
     }
 
     public static string SuggestedFileName(string format = "png") =>

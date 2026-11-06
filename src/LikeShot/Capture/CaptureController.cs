@@ -98,15 +98,38 @@ public sealed class CaptureController
             _session = null;
         }
 
-        // 整屏那份位图（3200×2000 就是 25MB）加上放大镜、打码底图那些一次性的整块缓冲，
-        // 都落在大对象堆上；.NET 收掉之后不主动把段还给系统，任务管理器里的数字就一直挂着。
-        // 收摊时压一次堆，让下一次截图用同一块，而不是接着往上要。
+        TrimWorkingSet();
+    }
+
+    /// <summary>
+    /// 收摊压堆：整屏那份位图（3200×2000 就是 25MB）加上放大镜、打码底图那些一次性的整块缓冲，
+    /// 都落在大对象堆上；.NET 收掉之后不主动把段还给系统，任务管理器里的数字就一直挂着。
+    /// 收摊时压一次堆，让下一次截图用同一块，而不是接着往上要。
+    /// GC 收完只是「可用」，任务管理器里的数字要等系统自己来要页面才掉。
+    /// 轻量常驻软件的惯例：收摊时主动把工作集还回去，下次用哪页再进哪页。
+    /// </summary>
+    private static void TrimWorkingSet()
+    {
         GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
         GC.Collect();
-        // GC 收完只是「可用」，任务管理器里的数字要等系统自己来要页面才掉。
-        // 轻量常驻软件的惯例：收摊时主动把工作集还回去，下次用哪页再进哪页。
         LikeShot.Native.Win32.SetProcessWorkingSetSize(
             LikeShot.Native.Win32.GetCurrentProcess(), -1, -1);
+    }
+
+    /// <summary>入库后的自动收摊跑了几回；自检用它断言这条链路活着。</summary>
+    internal static int SettlesForTest { get; private set; }
+
+    /// <summary>
+    /// Abort 里那次收拾接不到最后一批垃圾：历史入库排在空闲优先级，
+    /// PNG 编码、缩略图、剪贴板转位图这些最大块的缓冲都是入库/复制跑起来才分配的。
+    /// 所以入库跑完再补一次，每截一张都回到干净的低水位，而不是越截越高。
+    /// 截图层又开着（手快连截）就跳过——截屏进行中压堆只会白卡一下，等 Abort 再收。
+    /// </summary>
+    internal static void SettleAfterHistoryWrite()
+    {
+        if (Application.Current?.Windows.OfType<CaptureOverlay>().Any() == true) return;
+        TrimWorkingSet();
+        SettlesForTest++;
     }
 
     private void OnFinish(FinishRequest request)

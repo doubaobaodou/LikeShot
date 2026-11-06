@@ -174,8 +174,13 @@ public sealed class HistoryStore
     {
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher == null) { Add(image, source); return; }
-        dispatcher.InvokeAsync(() => Add(image, source),
-            System.Windows.Threading.DispatcherPriority.ContextIdle);
+        // 入库跑完，一轮出图的垃圾才算真正产生完（编码缓冲、缩略图都是这里才分配的），
+        // 所以跟在后面再排一次同优先级的收尾：压大对象堆 + 把工作集还回去。
+        dispatcher.InvokeAsync(() =>
+        {
+            Add(image, source);
+            CaptureController.SettleAfterHistoryWrite();
+        }, System.Windows.Threading.DispatcherPriority.ContextIdle);
     }
 
     private static void WriteThumb(BitmapSource image, string path)
@@ -305,10 +310,18 @@ public sealed class HistoryStore
         if (loaded == null) return null;
         lock (Gate)
         {
-            if (_thumbCache.Count > 400) _thumbCache.Clear();
+            // 上限按内存算：一张 420 长边的解码位图最多 0.7MB，历史页滚一路也就同时看几十张，
+            // 64 张够了。上限放太宽，把历史滚一遍就能把内存滚上去上百 MB。
+            if (_thumbCache.Count >= 64) _thumbCache.Clear();
             _thumbCache[e.Id] = loaded;
         }
         return loaded;
+    }
+
+    /// <summary>历史页关掉就清：这批缓存只伺候那一页，页面不在了它们就该走。</summary>
+    public void ClearThumbCache()
+    {
+        lock (Gate) _thumbCache.Clear();
     }
 
     /// <summary>原图。复制、另存、再标注都从这里取。</summary>
