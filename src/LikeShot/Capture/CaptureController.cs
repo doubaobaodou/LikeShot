@@ -1,3 +1,4 @@
+using System.Runtime;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using LikeShot.UI;
@@ -101,6 +102,12 @@ public sealed class CaptureController
             _session.Snapshot.Dispose();
             _session = null;
         }
+
+        // 一次截图要往大对象堆上放两份整屏（字节数组 + 冻结图，各 25MB）。.NET 把它们收掉之后
+        // 并不主动把段还给系统，任务管理器里那个数字就一直挂着。收摊时压一次堆，
+        // 让下一次截图用同一块，而不是接着往上要。
+        GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+        GC.Collect();
     }
 
     private void OnFinish(FinishRequest request)
