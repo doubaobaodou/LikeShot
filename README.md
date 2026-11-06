@@ -14,9 +14,15 @@ QQ 开着、但你把 QQ 自己的截图热键关掉了：连着按两次之后 
 
 ## 下载
 
-去 [Releases](https://github.com/doubaobaodou/LikeShot/releases/latest) 拿
-`...-selfcontained.zip`，解压双击 `LikeShot.exe` 就能跑，不用装任何东西；
-已经装了 .NET 8 桌面运行时的可以拿 153 KB 的 `...-portable.zip`。
+去 [Releases](https://github.com/doubaobaodou/LikeShot/releases/latest)，三种包按需要挑：
+
+- `...-setup.exe` —— 正常安装：向导里选目录、勾快捷方式，装完开始菜单和桌面都有图标，
+  控制面板里能卸载。只装给当前用户，落在 `%LOCALAPPDATA%\Programs\LikeShot`，全程不弹 UAC
+- `...-selfcontained.zip` —— 不想装的人：解压双击 `LikeShot.exe` 就能跑，不用装任何东西
+- `...-portable.zip` —— 已经装了 .NET 8 桌面运行时的人，体积小一个数量级
+
+装到 `%LOCALAPPDATA%` 的安装版和绿色版共用同一份 `%APPDATA%\LikeShot`（配置、日志、历史图库），
+换着跑不用重新设置；卸载只删程序本身，不会动你截过的图。
 没有代码签名，首次运行 SmartScreen 会拦一下，点「仍要运行」。
 
 ## 功能
@@ -62,6 +68,11 @@ cd src\LikeShot
 dotnet build
 dotnet run
 ```
+
+出发布包：`pack.cmd 0.1.6` 先出单文件 exe，再调 Inno Setup 编出 `setup.exe`，
+产物都落在 `dist\`。没装 Inno Setup 时照样出 exe，只是跳过安装器
+（装一次：`winget install JRSoftware.InnoSetup`）。安装脚本是 `installer\LikeShot.iss`，
+UTF-8 带 BOM，去掉 BOM 向导里的中文会变乱码。
 
 ## 自检
 
