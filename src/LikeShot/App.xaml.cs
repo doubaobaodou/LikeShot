@@ -78,6 +78,8 @@ public partial class App : Application
             Dispatcher.BeginInvoke(() => SelfTest.HistoryUiRun(_controller, () => Shutdown()));
         else if (e.Args.Contains("--selftest") && e.Args.Contains("--statusshot"))
             Dispatcher.BeginInvoke(() => SelfTest.StatusShotRun(_controller, () => Shutdown()));
+        else if (e.Args.Contains("--selftest") && e.Args.Contains("--selectshot"))
+            Dispatcher.BeginInvoke(() => SelfTest.SelectShotRun(_controller, () => Shutdown()));
         else if (e.Args.Contains("--selftest") && e.Args.Contains("--settingsui"))
             Dispatcher.BeginInvoke(SelfTest.ShowSettings);
         else if (e.Args.Contains("--selftest") && e.Args.Contains("--hotkeytest"))

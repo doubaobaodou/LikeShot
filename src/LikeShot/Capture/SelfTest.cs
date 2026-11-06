@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using LikeShot.Drawing;
@@ -113,6 +114,58 @@ public static class SelfTest
             session.Undo();
             log.AppendLine($"undo: {before} -> {session.Layer.Items.Count}");
 
+            // 3.5) 选中已画内容：带着画具点它也必须选中（不能再落一笔），然后能拖走、拖角放大、删掉。
+            {
+                var rectItem = session.Layer.Items.OfType<RectAnnotation>().FirstOrDefault();
+                if (rectItem == null) log.AppendLine("选中测试：前面没画出矩形，跳过");
+                else
+                {
+                    // 上边线四分之一处：既在边线上，又避开八个手柄。
+                    var onEdge = new Point(rectItem.Box.X + rectItem.Box.Width / 4.0, rectItem.Box.Y);
+                    int countBefore = session.Layer.Items.Count;
+                    session.SetTool(ToolKind.Shape);
+                    session.PointerDown(onEdge, LeftOrRight.Left);
+                    session.PointerUp(onEdge);
+                    log.AppendLine($"带着画具点矩形边线：选中={session.Selected?.GetType().Name ?? "无（不对）"} " +
+                                   $"手柄={session.HitItemHandle(onEdge)}（应为 -1） 新增标注={session.Layer.Items.Count - countBefore}（应为 0）");
+
+                    var boxBefore = rectItem.Box;
+                    session.PointerDown(onEdge, LeftOrRight.Left);
+                    session.PointerMove(new Point(onEdge.X + 40, onEdge.Y + 30));
+                    session.PointerUp(new Point(onEdge.X + 40, onEdge.Y + 30));
+                    log.AppendLine($"拖走：左上 {boxBefore.X},{boxBefore.Y} → {rectItem.Box.X},{rectItem.Box.Y}（应 +40/+30） " +
+                                   $"大小={rectItem.Box.Width}x{rectItem.Box.Height}（应仍是 {boxBefore.Width}x{boxBefore.Height}）");
+
+                    var corner = new Point(rectItem.Box.X + rectItem.Box.Width, rectItem.Box.Y + rectItem.Box.Height);
+                    var sizeBefore = rectItem.Box;
+                    log.AppendLine($"右下角手柄命中={session.HitItemHandle(corner)}（应为 4）");
+                    session.PointerDown(corner, LeftOrRight.Left);
+                    session.PointerMove(new Point(corner.X + 50, corner.Y + 40));
+                    session.PointerUp(new Point(corner.X + 50, corner.Y + 40));
+                    log.AppendLine($"拖右下角放大：{sizeBefore.Width}x{sizeBefore.Height} → {rectItem.Box.Width}x{rectItem.Box.Height}（应 +50/+40）");
+
+                    session.SetFontDp(40);
+                    log.AppendLine($"字号滑条到 40：FontSize={session.FontSize}（应为 {(int)Math.Round(40 * session.UiScale)}）");
+                    var textItem = new TextAnnotation("字号测试",
+                        new Point(rectItem.Box.X + 6, rectItem.Box.Y + 6), session.Color, session.FontSize);
+                    session.Layer.Add(textItem);
+                    session.Select(textItem);
+                    session.SetFontDp(64);
+                    log.AppendLine($"选中这条文字再拖到 64：它自己={textItem.FontSize}（应为 {(int)Math.Round(64 * session.UiScale)}）");
+
+                    int total = session.Layer.Items.Count;
+                    session.OnKeyDown(Key.Delete, false, false);
+                    log.AppendLine($"Delete 删选中：{total} → {session.Layer.Items.Count}（应 -1） 选中={session.Selected?.GetType().Name ?? "无（对）"}");
+
+                    session.SetTool(ToolKind.None);
+                    session.Select(rectItem);
+                    var emptySpot = new Point(session.Selection.X + 235, session.Selection.Y + 155);
+                    session.PointerDown(emptySpot, LeftOrRight.Left);
+                    session.PointerUp(emptySpot);
+                    log.AppendLine($"点空白处：选中={session.Selected?.GetType().Name ?? "无（对）"}");
+                }
+            }
+
             controller.Abort();
 
             // 4) 退化选区不该成图。以前这里退回整张桌面快照，「只想取消这一下」会变成「导出一张全屏」。
@@ -183,6 +236,21 @@ public static class SelfTest
             pin.Session.PointerUp(new Point(primary.Bounds.X + 380, primary.Bounds.Y + 220));
             var pinOut = pin.Session.RenderResult();
             log.AppendLine($"钉图窗标注：标注={pin.Session.Layer.Items.Count} 成图={pinOut?.PixelWidth}x{pinOut?.PixelHeight}（应为 600x400）");
+
+            // 8.5) 钉图窗里点已画内容：这一下必须归会话（选中/拖动），不能变成「拖着窗口走」。
+            var pinStroke = pin.Session.Layer.Items.OfType<StrokeAnnotation>().FirstOrDefault();
+            if (pinStroke == null) log.AppendLine("钉图窗选中测试：前面没画出笔画，跳过");
+            else
+            {
+                pin.Session.SetTool(ToolKind.None);
+                var mid = pinStroke.Points[pinStroke.Points.Count / 2];
+                bool onStroke = pin.ClickGoesToSession(mid);
+                bool offImage = pin.ClickGoesToSession(new Point(primary.Bounds.X + 160 + 700, primary.Bounds.Y + 200));
+                pin.Session.PointerDown(mid, LeftOrRight.Left);
+                pin.Session.PointerUp(mid);
+                log.AppendLine($"钉图窗点笔画正中：交给会话={onStroke}（应为 True，False 就是这一下变成拖窗口） " +
+                               $"点到图片外={offImage}（应为 False） 选中={pin.Session.Selected?.GetType().Name ?? "无（不对）"}");
+            }
             pin.Close();
 
             // 9) 长截图拼接：造一个已知滚动量的两帧
@@ -597,6 +665,72 @@ public static class SelfTest
         }
 
         File.WriteAllText(Path.Combine(dir, "status-report.txt"), log.ToString());
+        Console.Out.WriteLine(log);
+        exit();
+    }
+
+    /// <summary>
+    /// 版式取证：把「选中框」真的画到截图层上渲染一张出来。
+    /// 虚线框、八个手柄在高分屏上到底多大、和选区自己的框会不会混成一团，只有看图才知道。
+    /// </summary>
+    public static async void SelectShotRun(CaptureController controller, Action exit)
+    {
+        var log = new StringBuilder();
+        string dir = Path.Combine(Path.GetTempPath(), "likeshot-selftest");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            controller.BeginCapture();
+            var session = controller.SessionForTest;
+            if (session == null) throw new InvalidOperationException("截图会话没起来");
+            var d = Display.All().First(x => x.IsPrimary);
+            int x0 = d.Bounds.X + 400, y0 = d.Bounds.Y + 300;
+            session.PointerDown(new Point(x0, y0), LeftOrRight.Left);
+            session.PointerUp(new Point(x0, y0));
+            session.PointerMove(new Point(x0 + 500, y0 + 320));
+            session.PointerUp(new Point(x0 + 500, y0 + 320));
+            await Task.Delay(400);
+
+            session.SetTool(ToolKind.Shape);
+            session.SetShapeKind(ShapeKind.Rect);
+            session.PointerDown(new Point(x0 + 40, y0 + 40), LeftOrRight.Left);
+            session.PointerMove(new Point(x0 + 260, y0 + 150));
+            session.PointerUp(new Point(x0 + 260, y0 + 150));
+
+            session.SetTool(ToolKind.Arrow);
+            session.PointerDown(new Point(x0 + 300, y0 + 60), LeftOrRight.Left);
+            session.PointerMove(new Point(x0 + 440, y0 + 220));
+            session.PointerUp(new Point(x0 + 440, y0 + 220));
+
+            var rect = session.Layer.Items.OfType<RectAnnotation>().First();
+            session.Select(rect);
+            await Task.Delay(400);
+            var overlay = controller.OverlaysForTest.First();
+            var errRect = RenderWindowToFile(overlay, Path.Combine(dir, "select-rect.png"));
+            log.AppendLine($"选中矩形：渲染={(errRect ?? "成功")} 包围盒={rect.Bounds.Width:0}x{rect.Bounds.Height:0} " +
+                           $"手柄数={session.ItemHandlePoints().Length}");
+
+            session.Select(session.Layer.Items.OfType<ArrowAnnotation>().First());
+            await Task.Delay(300);
+            var errArrow = RenderWindowToFile(overlay, Path.Combine(dir, "select-arrow.png"));
+            log.AppendLine($"选中箭头：渲染={(errArrow ?? "成功")}");
+
+            // 顺手把文字工具的二级条也渲染一张：字号滑条是新换的，得看一眼拖起来顺不顺、数值跟不跟。
+            session.Select(null);
+            session.SetTool(ToolKind.Text);
+            session.SetFontDp(34);
+            await Task.Delay(400);
+            var errFont = RenderWindowToFile(overlay, Path.Combine(dir, "font-slider.png"));
+            log.AppendLine($"字号滑条面板：渲染={(errFont ?? "成功")} FontDp={session.FontDp} FontSize={session.FontSize}");
+
+            controller.Abort();
+        }
+        catch (Exception ex)
+        {
+            log.AppendLine("FAILED: " + ex);
+        }
+
+        File.WriteAllText(Path.Combine(dir, "select-report.txt"), log.ToString());
         Console.Out.WriteLine(log);
         exit();
     }
