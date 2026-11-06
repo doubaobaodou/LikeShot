@@ -89,21 +89,49 @@ public sealed class ScreenSnapshot : IDisposable
         return Color.FromRgb(Backing[i + 2], Backing[i + 1], Backing[i]);
     }
 
-    /// <summary>裁出一块物理区域，返回左上角对齐的位图。</summary>
-    public BitmapSource Crop(Int32Rect physicalRect)
-    {
-        var clipped = Intersect(physicalRect);
-        if (clipped.Width <= 0 || clipped.Height <= 0) return Image;
-        return new CroppedBitmap(Image, clipped);
-    }
-
     public Int32Rect Intersect(Int32Rect rect)
     {
         int x0 = Math.Max(rect.X, VirtualBounds.X);
         int y0 = Math.Max(rect.Y, VirtualBounds.Y);
         int x1 = Math.Min(rect.Right(), VirtualBounds.Right());
         int y1 = Math.Min(rect.Bottom(), VirtualBounds.Bottom());
-        return new Int32Rect(x0, y0, Math.Max(0, x1 - x0), Math.Max(1, y1 - y0));
+        // 完全不相交就给 0×0，让调用方判「这块区域不在屏幕上」。
+        // 以前高度兜到 1，一个跑到屏幕外的选区会被当成「还剩一行像素」。
+        return new Int32Rect(x0, y0, Math.Max(0, x1 - x0), Math.Max(0, y1 - y0));
+    }
+
+    /// <summary>
+    /// 把一张任意图当作「桌面的一块」包成快照：画布是整台显示器的物理区域，
+    /// 图按 1:1 贴在指定位置，其余地方涂桌面底色。再标注（历史图丢回截图层）靠这个入口，
+    /// 之后所有绘制、马赛克、导出都能沿用同一套坐标口径。
+    /// </summary>
+    public static ScreenSnapshot FromImageOnDesk(BitmapSource source, Int32Rect canvas, Int32Rect placeAt)
+    {
+        int w = Math.Max(1, canvas.Width), h = Math.Max(1, canvas.Height);
+        int stride = w * 4;
+        var backing = new byte[stride * h];
+
+        // 底色取截图层暗区那一族：外面那圈本来还会被暗罩再压一层，看着就是「图摆在桌面上」。
+        for (int i = 0; i < backing.Length; i += 4)
+        {
+            backing[i] = 0x2B; backing[i + 1] = 0x26; backing[i + 2] = 0x23; backing[i + 3] = 0xFF;
+        }
+
+        var bgra = new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
+        int copyW = Math.Min(placeAt.Width, bgra.PixelWidth);
+        int copyH = Math.Min(placeAt.Height, bgra.PixelHeight);
+        int originX = placeAt.X - canvas.X, originY = placeAt.Y - canvas.Y;
+        var row = new byte[copyW * 4];
+        for (int y = 0; y < copyH; y++)
+        {
+            bgra.CopyPixels(new Int32Rect(0, y, copyW, 1), row, copyW * 4, 0);
+            Buffer.BlockCopy(row, 0, backing, (originY + y) * stride + originX * 4, copyW * 4);
+        }
+
+        var image = new WriteableBitmap(w, h, 96, 96, PixelFormats.Bgra32, null);
+        image.WritePixels(new Int32Rect(0, 0, w, h), backing, stride, 0);
+        image.Freeze();
+        return new ScreenSnapshot(image, backing, canvas);
     }
 
     /// <summary>

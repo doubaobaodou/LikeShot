@@ -120,6 +120,19 @@ public sealed class CaptureSession
         RebuildMosaics();
     }
 
+    /// <summary>
+    /// 直接以给定矩形进入「已框选」状态。再标注（从历史截图里拿一张图接着画）
+    /// 走的就是这个入口：那张图没有「框选」这一步，但后面的机器全都要靠选区。
+    /// </summary>
+    public void SelectRect(Int32Rect rect)
+    {
+        Selection = rect;
+        PolygonPoints = null;
+        Phase = CapturePhase.Selected;
+        RebuildMosaics();
+        Changed?.Invoke();
+    }
+
     public static Point CurrentPhysicalCursor()
     {
         Win32.GetCursorPos(out var p);
@@ -374,8 +387,7 @@ public sealed class CaptureSession
         if (key == Key.C && !ctrl && !shift && Tool == ToolKind.None)
         {
             var c = Snapshot.PixelAt((int)Cursor.X, (int)Cursor.Y);
-            if (c.A != 0) Exporter.TrySetText($"#{c.R:X2}{c.G:X2}{c.B:X2}");
-            return true;
+            if (c.A != 0) Exporter.TrySetText($"#{c.R:X2}{c.G:X2}{c.B:X2}");            return true;
         }
 
         if (key is Key.Enter or Key.Return && HasSelection)
@@ -514,10 +526,14 @@ public sealed class CaptureSession
     /// <summary>阴影的渲染参数：四周留出的边距要盖住最外一层影。</summary>
     private const double ShadowSpreadDp = 24, ShadowPadDp = 26;
 
-    public BitmapSource RenderResult()
+    /// <summary>
+    /// 成图。选区被拖到屏幕外、退化成一个点的时候返回 null——
+    /// 以前这里返回整张桌面快照，等于「只想取消这一下，结果存了一张全屏图」。
+    /// </summary>
+    public BitmapSource? RenderResult()
     {
         var bounds = Snapshot.Intersect(FinalRect());
-        if (bounds.Width < 1 || bounds.Height < 1) return Snapshot.Image;
+        if (bounds.Width < 1 || bounds.Height < 1) return null;
 
         double radiusPx = CornerRadiusDp * UiScale;
         double pad = DropShadow ? ShadowPadDp * UiScale : 0;

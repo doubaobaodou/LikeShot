@@ -31,6 +31,9 @@ public sealed class AppConfig
     /// <summary>截图那层 UI（工具栏、放大镜）的配色：dark 或 light。浅色就是 QQ 那种白工具栏。</summary>
     public string CaptureUiTheme { get; set; } = "dark";
 
+    /// <summary>历史截图最多留几张；收藏的那几张不参与淘汰。</summary>
+    public int HistoryLimit { get; set; } = 200;
+
     [JsonIgnore]
     public static JsonSerializerOptions Options { get; } = new()
     {

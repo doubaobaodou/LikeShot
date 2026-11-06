@@ -6,6 +6,8 @@ namespace LikeShot.Capture;
 
 /// <summary>
 /// 截图会话的总控：拉快照、开覆盖层、把「完成/保存/钉图/长截图」这些出口接起来。
+/// 出口统一按「先入库、再出图、失败就留在截图层说一句」走——
+/// 图先落到历史里，后面复制或保存再怎么失败，都不会真的丢东西。
 /// </summary>
 public sealed class CaptureController
 {
@@ -14,6 +16,7 @@ public sealed class CaptureController
     private CaptureSession? _session;
     private LongCaptureRunner? _longRunner;
     private readonly List<PinWindow> _pins = [];
+    private bool _replayMode;
 
     public CaptureController(Application app) => _app = app;
 
@@ -22,15 +25,48 @@ public sealed class CaptureController
     public void BeginCapture()
     {
         if (_session != null) return;
+        StartSession(ScreenSnapshot.GrabVirtualDesktop(), Display.All(), null, replay: false);
+    }
 
-        var snapshot = ScreenSnapshot.GrabVirtualDesktop();
-        var displays = Display.All();
+    /// <summary>
+    /// 把一张历史截图丢回截图层接着画（再标注）。
+    /// 比整台显示器还大的图（长截图）没法 1:1 铺开，那种交给钉图窗——它能缩放，标注机器是同一套。
+    /// </summary>
+    public void BeginReplay(BitmapSource image)
+    {
+        if (_session != null) return;
+        var all = Display.All();
+        if (all.Count == 0) return;
+        var target = all.FirstOrDefault(d => d.IsPrimary) ?? all[0];
+
+        if (image.PixelWidth > target.PhysicalWidth || image.PixelHeight > target.PhysicalHeight)
+        {
+            Log.Write($"再标注改走钉图窗：图={image.PixelWidth}x{image.PixelHeight} 屏幕={target.PhysicalWidth}x{target.PhysicalHeight}");
+            Pin(image, new Int32Rect(target.Bounds.X + 80, target.Bounds.Y + 80, image.PixelWidth, image.PixelHeight));
+            return;
+        }
+
+        int x = target.Bounds.X + (target.Bounds.Width - image.PixelWidth) / 2;
+        int y = target.Bounds.Y + (target.Bounds.Height - image.PixelHeight) / 2;
+        var rect = new Int32Rect(x, y, image.PixelWidth, image.PixelHeight);
+        StartSession(ScreenSnapshot.FromImageOnDesk(image, target.Bounds, rect), all, rect, replay: true);
+    }
+
+    private void StartSession(ScreenSnapshot snapshot, IReadOnlyList<Display> allDisplays, Int32Rect? preselect, bool replay)
+    {
+        // 快照盖住哪几台显示器就在哪几台开遮罩层：再标注的画布只有一台那么宽，
+        // 给别的屏也开一层只会得到一块涂了底色的死屏。
+        var vb = snapshot.VirtualBounds;
+        var displays = allDisplays.Where(d =>
+            d.Bounds.X < vb.Right() && vb.X < d.Bounds.Right() &&
+            d.Bounds.Y < vb.Bottom() && vb.Y < d.Bounds.Bottom()).ToList();
         if (displays.Count == 0)
         {
             snapshot.Dispose();
             return;
         }
 
+        _replayMode = replay;
         double uiScale = displays.FirstOrDefault(d => d.IsPrimary)?.Scale ?? displays[0].Scale;
         _session = new CaptureSession(snapshot, displays, uiScale);
         _session.Controller = this;
@@ -46,6 +82,7 @@ public sealed class CaptureController
         }
 
         foreach (var overlay in _overlays) overlay.FinishSetup();
+        if (preselect is { } rect) _session.SelectRect(rect);
     }
 
     public void Abort()
@@ -79,6 +116,9 @@ public sealed class CaptureController
             return;
         }
 
+        // 入库排在出图之前发起（真正写盘放到空闲优先级，不挡收摊）：
+        // 后面复制或保存再怎么失败，这张图都还能从「设置 → 历史截图」里找回来。
+        HistoryStore.Shared.AddLater(image, _replayMode ? HistoryStore.SourceReplay : HistoryStore.SourceCapture);
 
         switch (request.Mode)
         {
@@ -139,6 +179,16 @@ public sealed class CaptureController
         pin.Closed += (_, _) => _pins.Remove(pin);
         _pins.Add(pin);
         pin.ShowPinned();
+    }
+
+    /// <summary>历史里一键钉到桌面：钉在光标所在那台显示器的正中。</summary>
+    public void PinFromHistory(BitmapSource image)
+    {
+        var cursor = CaptureSession.CurrentPhysicalCursor();
+        var display = Display.NearestTo((int)cursor.X, (int)cursor.Y);
+        int x = display.Bounds.X + Math.Max(0, (display.Bounds.Width - image.PixelWidth) / 2);
+        int y = display.Bounds.Y + Math.Max(0, (display.Bounds.Height - image.PixelHeight) / 2);
+        Pin(image, new Int32Rect(x, y, image.PixelWidth, image.PixelHeight));
     }
 
     private void BeginLongCapture()

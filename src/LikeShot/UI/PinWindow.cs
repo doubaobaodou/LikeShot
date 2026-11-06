@@ -484,6 +484,7 @@ public sealed class PinWindow : Window
             _toolbar.ShowStatus("这张钉图已经被缩到没有像素了，没有可导出的内容", true);
             return;
         }
+        RecordHistory(image);
         // 复制没成就别关窗口：图还在这儿，重试和另存都点得到。
         var error = Exporter.TryCopyImage(image);
         if (error != null)
@@ -503,6 +504,7 @@ public sealed class PinWindow : Window
             _toolbar.ShowStatus("这张钉图已经被缩到没有像素了，没有可导出的内容", true);
             return;
         }
+        RecordHistory(image);
         var saved = Exporter.SaveDialog(image, App.Config, out var writeError);
         if (writeError != null)
         {
@@ -517,6 +519,9 @@ public sealed class PinWindow : Window
             if (copyError != null) _toolbar.ShowStatus($"文件存好了，但没能顺带复制：{copyError}", true);
         }
     }
+
+    private static void RecordHistory(BitmapSource image) =>
+        HistoryStore.Shared.AddLater(image, HistoryStore.SourcePin);
 
     /// <summary>把标注按当前窗口的拉伸比例画出来，X/Y 分开，拖过边之后也不会错位。</summary>
     private sealed class PinSurface : FrameworkElement

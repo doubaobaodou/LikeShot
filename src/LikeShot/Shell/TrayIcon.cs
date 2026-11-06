@@ -56,6 +56,11 @@ public sealed class TrayIcon : IDisposable
         settings.Header = "设置…";
         settings.Click += (_, _) => Application.Current.Dispatcher.Invoke(() => App.OpenSettings());
 
+        var history = MakeItem("history");
+        history.Header = "历史截图…";
+        history.Click += (_, _) => Application.Current.Dispatcher.Invoke(
+            () => App.OpenSettings(SettingsWindow.HistorySectionIndex));
+
         var folder = MakeItem("folder");
         folder.Header = "打开保存目录";
         folder.Click += (_, _) => OpenFolder();
@@ -89,6 +94,7 @@ public sealed class TrayIcon : IDisposable
         _menu.Items.Add(_captureItem);
         _menu.Items.Add(Sep());
         _menu.Items.Add(settings);
+        _menu.Items.Add(history);
         _menu.Items.Add(folder);
         _menu.Items.Add(_autostartItem);
         _menu.Items.Add(Sep());

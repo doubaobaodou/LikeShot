@@ -16,13 +16,16 @@ public partial class App : Application
 
     public static AppConfig Config { get; private set; } = new();
 
+    /// <summary>设置页要驱动的截图动作（把历史图钉出去、丢回截图层）都走这个总控。</summary>
+    internal CaptureController? Controller => _controller;
+
     /// <summary>自检要直接读仲裁器的判定，不给它开后门就只能靠日志猜。</summary>
     internal static HotkeyArbiter? Arbiter { get; private set; }
 
     private static UI.SettingsWindow? _settings;
 
-    /// <summary>设置窗口只开一个：已经开着就把它带到前面。</summary>
-    public static void OpenSettings()
+    /// <summary>设置窗口只开一个：已经开着就把它带到前面。section 是从左边第几页进去，-1 表示不动。</summary>
+    public static void OpenSettings(int section = -1)
     {
         var app = (App)Current;
         if (_settings is null)
@@ -30,6 +33,7 @@ public partial class App : Application
             _settings = new UI.SettingsWindow(Config);
             _settings.Closed += (_, _) => _settings = null;
         }
+        if (section >= 0) _settings.SelectSection(section);
         if (_settings.WindowState == WindowState.Minimized) _settings.WindowState = WindowState.Normal;
         _settings.Show();
         _settings.Activate();
@@ -103,7 +107,7 @@ public partial class App : Application
         base.OnExit(e);
     }
 
-    private static string ConfigDirectory =>
+    internal static string ConfigDirectory =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "LikeShot");
 
     internal static string ConfigPath => Path.Combine(ConfigDirectory, "config.json");

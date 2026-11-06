@@ -14,7 +14,7 @@ namespace LikeShot.UI;
 /// 热键还是「点一下把组合键按出来」，底部「应用」一次改完立刻生效——
 /// 热键这种东西改完就是要马上试一下的。
 /// </summary>
-public sealed class SettingsWindow : Window
+public sealed partial class SettingsWindow : Window
 {
     private readonly AppConfig _config;
     private readonly ChordBox _chord = new();
@@ -47,7 +47,7 @@ public sealed class SettingsWindow : Window
         ["dark", "light"], ["深色", "浅色"], ["和 QQ 一样的深色工具栏", "白色工具栏，亮色环境下看得清"]);
 
     private readonly List<NavItem> _navItems = [];
-    private readonly List<ScrollViewer> _pages = [];
+    private readonly List<FrameworkElement> _pages = [];
 
     public SettingsWindow(AppConfig config)
     {
@@ -80,6 +80,7 @@ public sealed class SettingsWindow : Window
         _captureTheme.Changed += MarkDirty;
         _poll.Changed += MarkDirty;
         _notches.Changed += MarkDirty;
+        _historyLimit.Changed += MarkDirty;
         _autoStart.Checked += (_, _) => MarkDirty();
         _autoStart.Unchecked += (_, _) => MarkDirty();
 
@@ -99,6 +100,7 @@ public sealed class SettingsWindow : Window
         _magnifier.IsChecked = config.ShowMagnifier;
         _copyAfterSave.IsChecked = config.CopyAfterSave;
         _captureTheme.Select(config.CaptureUiTheme);
+        _historyLimit.Select(config.HistoryLimit);
         _autoStart.IsChecked = Shell.AutoStart.IsEnabled();
 
         RefreshChordHint();
@@ -129,6 +131,7 @@ public sealed class SettingsWindow : Window
         _config.ShowMagnifier = _magnifier.IsChecked == true;
         _config.CopyAfterSave = _copyAfterSave.IsChecked == true;
         _config.CaptureUiTheme = _captureTheme.Selected;
+        _config.HistoryLimit = _historyLimit.Selected;
         Theme.LightUi = _captureTheme.Selected == "light";
 
         var dir = _saveDir.Text.Trim();
@@ -138,15 +141,28 @@ public sealed class SettingsWindow : Window
         _config.RunOnStartup = wantAutoStart && Shell.AutoStart.Set(wantAutoStart);
         _autoStart.IsChecked = _config.RunOnStartup;
 
-        AppConfig.Save(_config);
+        // 先让改动当场生效，再谈记住：写盘失败不该把用户已经按下的「应用」变成白点一次。
         if (Application.Current is App app) app.ReloadHotkey();
-        Log.Write($"设置已应用 热键={_config.CaptureChord} 让位={string.Join(",", _config.YieldToProcesses)} " +
-                  $"格式={_config.SaveFormat} 间隔={_config.LongCapturePollMilliseconds}ms 每帧{_config.LongCaptureScrollNotches}格 " +
-                  $"放大镜={_config.ShowMagnifier} 存后复制={_config.CopyAfterSave} 配色={_config.CaptureUiTheme} 自启={_config.RunOnStartup}");
-
         RefreshChordHint();
         RefreshFileName();
-        _status.Text = $"已应用 {DateTime.Now:HH:mm:ss}";
+
+        var saveError = AppConfig.Save(_config);
+        if (saveError != null)
+        {
+            // 生效了但没记住——这两件事必须分开说，合成一句「失败」会让人以为白点了。
+            _status.Text = $"改动已生效，但没能记住：{saveError}（下次启动会回到旧设置）";
+            Log.Write($"设置应用：已生效，写盘失败 {saveError}");
+            return false;
+        }
+
+        int pruned = HistoryStore.Shared.PruneTo(_config.HistoryLimit);
+        Log.Write($"设置已应用 热键={_config.CaptureChord} 让位={string.Join(",", _config.YieldToProcesses)} " +
+                  $"格式={_config.SaveFormat} 间隔={_config.LongCapturePollMilliseconds}ms 每帧{_config.LongCaptureScrollNotches}格 " +
+                  $"放大镜={_config.ShowMagnifier} 存后复制={_config.CopyAfterSave} 配色={_config.CaptureUiTheme} " +
+                  $"自启={_config.RunOnStartup} 历史留={_config.HistoryLimit}张 顺手删掉={pruned}张");
+        _status.Text = pruned > 0
+            ? $"已应用 {DateTime.Now:HH:mm:ss}，并按新的保留数量删掉 {pruned} 张最旧的"
+            : $"已应用 {DateTime.Now:HH:mm:ss}";
         return true;
     }
 
@@ -163,8 +179,8 @@ public sealed class SettingsWindow : Window
         _notches.Select(notches);
     }
 
-    /// <summary>截图/自检用：直接切到第 index 个导航页。</summary>
-    internal void ShowSectionForTest(int index) => SwitchSection(index);
+    /// <summary>截图/自检/托盘用：直接切到第 index 个导航页。</summary>
+    internal void SelectSection(int index) => SwitchSection(index);
 
     private void PickFolder()
     {
@@ -225,13 +241,15 @@ public sealed class SettingsWindow : Window
     private void BuildLayout()
     {
         // 每个导航项一个页面；让位名单跟着热键走，它们本来就是一件事。
-        var sections = new (string Title, string Glyph, Func<UIElement> Build)[]
+        // 历史截图那页自己带滚动区和常驻筛选条，所以不再套外层 ScrollViewer。
+        var sections = new (string Title, string Glyph, Func<UIElement> Build, bool WrapScroll)[]
         {
-            ("截图热键", "\uE765", BuildHotkeyPage),
-            ("保存", "\uE74E", BuildSavePage),
-            ("截图时", "\uE722", BuildCapturePage),
-            ("长截图", "\uE81E", BuildLongPage),
-            ("启动", "\uE7E8", BuildStartupPage),
+            ("截图热键", "\uE765", BuildHotkeyPage, true),
+            ("保存", "\uE74E", BuildSavePage, true),
+            ("截图时", "\uE722", BuildCapturePage, true),
+            ("长截图", "\uE81E", BuildLongPage, true),
+            ("历史截图", "\uE823", BuildHistoryPage, false),
+            ("启动", "\uE7E8", BuildStartupPage, true),
         };
 
         var nav = new StackPanel { Margin = new Thickness(8, 10, 8, 8) };
@@ -245,13 +263,16 @@ public sealed class SettingsWindow : Window
             nav.Children.Add(item);
             _navItems.Add(item);
 
-            var host = new ScrollViewer
-            {
-                Content = sections[i].Build(),
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                Visibility = Visibility.Collapsed
-            };
+            var page = sections[i].Build();
+            FrameworkElement host = sections[i].WrapScroll
+                ? new ScrollViewer
+                {
+                    Content = page,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+                }
+                : page as FrameworkElement ?? new Border { Child = page };
+            host.Visibility = Visibility.Collapsed;
             content.Children.Add(host);
             _pages.Add(host);
         }
@@ -317,6 +338,9 @@ public sealed class SettingsWindow : Window
             _navItems[i].Selected = i == index;
             _pages[i].Visibility = i == index ? Visibility.Visible : Visibility.Collapsed;
         }
+
+        // 每次进历史页都重读一遍库：截图刚存进去的、另一个窗口删掉的，都要在这儿对得上。
+        if (index == HistorySectionIndex) RefreshHistory();
     }
 
     private UIElement BuildHotkeyPage()
@@ -483,6 +507,16 @@ public sealed class SettingsWindow : Window
         Style = CheckStyle(),
         VerticalAlignment = VerticalAlignment.Center
     };
+
+    /// <summary>取证用：从命令行拉起来拿不到前台权限，只能置顶再抢一次焦点。</summary>
+    internal void RaiseTopmostForTest()
+    {
+        Topmost = true;
+        Activate();
+        var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        Native.Win32.SetWindowPos(hwnd, Native.Win32.HWND_TOPMOST, 0, 0, 0, 0,
+            Native.Win32.SWP_NOMOVE | Native.Win32.SWP_NOSIZE);
+    }
 
     private void LoadWindowIcon()
     {

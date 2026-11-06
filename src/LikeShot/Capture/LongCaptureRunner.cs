@@ -182,6 +182,7 @@ public sealed class LongCaptureRunner : IDisposable
             _bar.ShowResult("还没抓到任何一帧：先滚一段页面，再点完成", true);
             return;
         }
+        Record(image);
         var error = Exporter.TryCopyImage(image);
         if (error != null)
         {
@@ -202,6 +203,7 @@ public sealed class LongCaptureRunner : IDisposable
             _bar.ShowResult("还没抓到任何一帧：先滚一段页面，再点保存", true);
             return;
         }
+        Record(image);
         var controller = _session.Controller;
         var path = Exporter.SaveDialog(image, App.Config, out var writeError);
         if (writeError != null)
@@ -220,6 +222,9 @@ public sealed class LongCaptureRunner : IDisposable
         }
         controller?.NotifySaved(path);
     }
+
+    private static void Record(BitmapSource image) =>
+        HistoryStore.Shared.AddLater(image, HistoryStore.SourceLong);
 
     public void Edit()
     {
