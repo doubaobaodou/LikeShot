@@ -48,6 +48,8 @@ QQ 开着、但你把 QQ 自己的截图热键关掉了：连着按两次之后 
   哪一步没成，会在工具栏下面当场说清为什么、并给一个重试的按钮，截图层不关——
   不会出现「按了没反应，图也不知道去哪了」
 - **托盘常驻**：截图、历史截图、设置、打开保存目录、开机自动启动、退出
+- **右键菜单**：截图层、钉图窗、历史卡片、输入框上的右键菜单和托盘是同一套卡片样式，
+  每条都带图标，做不了的（比如没选中字时的「剪切」）会灰掉，不会点了没反应
 
 ## 快捷键
 
@@ -95,6 +97,8 @@ UTF-8 带 BOM，去掉 BOM 向导里的中文会变乱码。
 .\LikeShot.exe --selftest --settingstest 验设置窗口改完热键不用重启就生效
 .\LikeShot.exe --selftest --statusshot 把「失败回执」和「成功回执」真的挂到截图层上渲染成图
 .\LikeShot.exe --selftest --selectshot 把「选中框」真的画到截图层上渲染成图，看手柄大小和虚实
+.\LikeShot.exe --selftest --menushot   把六份右键菜单（截图层、字框、钉图窗、历史卡片、
+                                       设置输入框、托盘）各自渲染成图，对一眼是不是同一套样式
 .\LikeShot.exe --selftest --settingsui --historyui --seedhistory --shot
                                        开设置窗自己抓一张版式图再收摊
 .\LikeShot.exe --snap 路径.png          只抓一张当前屏幕，不弹界面
