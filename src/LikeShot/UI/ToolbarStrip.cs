@@ -25,6 +25,9 @@ public sealed class ToolbarStrip : Border
     private readonly StackPanel _row;
     private readonly Border _subHost;
     private readonly StackPanel _subStack;
+    private readonly Border _statusHost;
+    private readonly TextBlock _statusText;
+    private readonly Button _statusButton;
     private readonly Dictionary<ToolKind, Button> _toolButtons = new();
     private readonly Dictionary<ToolKind, FrameworkElement> _subPanels = new();
 
@@ -78,9 +81,46 @@ public sealed class ToolbarStrip : Border
             Child = _subStack
         };
 
+        _statusText = new TextBlock
+        {
+            FontSize = 11.5,
+            Foreground = Theme.Brush(Theme.LoupeText),
+            VerticalAlignment = VerticalAlignment.Center,
+            MaxWidth = 460,
+            TextWrapping = TextWrapping.Wrap
+        };
+        _statusButton = new Button
+        {
+            Height = 22,
+            Padding = new Thickness(9, 1, 9, 1),
+            Margin = new Thickness(8, 0, 0, 0),
+            FontSize = 11.5,
+            Focusable = false,
+            Style = ButtonStyle(),
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Visibility = Visibility.Collapsed
+        };
+        // 挂一次固定的转发，换文案时只改 _statusAction，不用反复摘装事件。
+        _statusButton.Click += (_, _) => _statusAction?.Invoke();
+        var statusRow = new StackPanel { Orientation = Orientation.Horizontal };
+        statusRow.Children.Add(_statusText);
+        statusRow.Children.Add(_statusButton);
+        _statusHost = new Border
+        {
+            Background = Theme.Brush(Theme.BarBackground),
+            BorderBrush = Theme.Brush(Theme.BarBorder),
+            BorderThickness = new Thickness(1, 0, 1, 1),
+            CornerRadius = new CornerRadius(0, 0, 4, 4),
+            Padding = new Thickness(9, 4, 7, 4),
+            Visibility = Visibility.Collapsed,
+            Child = statusRow
+        };
+
         var stack = new StackPanel { Orientation = Orientation.Vertical };
         stack.Children.Add(_row);
         stack.Children.Add(_subHost);
+        stack.Children.Add(_statusHost);
         Child = stack;
 
         switch (mode)
@@ -154,6 +194,44 @@ public sealed class ToolbarStrip : Border
 
     /// <summary>无头验证与日志用：二级条当前是否展开。</summary>
     internal Visibility SubHostVisibility => _subHost.Visibility;
+
+    /// <summary>无头验证与日志用：状态行的文字，空字符串表示没在报任何东西。</summary>
+    internal string StatusTextForTest => _statusText.Text ?? "";
+
+    /// <summary>状态行会改变整条工具栏的高度，宿主（遮罩层/钉图窗）要重新定位。</summary>
+    public Action? RepositionRequested;
+
+    /// <summary>
+    /// 在工具栏下面挂一句回执。bad=true 用红字，actionLabel 非空时在句子右边给一个补救按钮——
+    /// 「失败了」必须同时回答「下一步点哪里」，只留一句错误没意义。
+    /// </summary>
+    public void ShowStatus(string text, bool bad, string? actionLabel = null, Action? action = null)
+    {
+        _statusText.Text = text;
+        _statusText.Foreground = Theme.Brush(bad ? Theme.DangerRed : Theme.LoupeText);
+        _statusAction = action;
+        if (actionLabel != null && action != null)
+        {
+            _statusButton.Content = actionLabel;
+            _statusButton.Visibility = Visibility.Visible;
+        }
+        else _statusButton.Visibility = Visibility.Collapsed;
+        _statusHost.Visibility = Visibility.Visible;
+        InvalidateMeasure();
+        RepositionRequested?.Invoke();
+    }
+
+    private Action? _statusAction;
+
+    public void ClearStatus()
+    {
+        _statusAction = null;
+        _statusText.Text = "";
+        _statusButton.Visibility = Visibility.Collapsed;
+        _statusHost.Visibility = Visibility.Collapsed;
+        InvalidateMeasure();
+        RepositionRequested?.Invoke();
+    }
 
     // 尺寸每次都现量：二级条刚展开的那一下 ActualHeight 还是旧值，
     // 拿它定位会让工具条看起来晚一拍才长高。

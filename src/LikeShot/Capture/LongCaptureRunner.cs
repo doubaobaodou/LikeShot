@@ -177,21 +177,48 @@ public sealed class LongCaptureRunner : IDisposable
     public void FinishToClipboard()
     {
         var image = BuildResult();
+        if (image == null)
+        {
+            _bar.ShowResult("还没抓到任何一帧：先滚一段页面，再点完成", true);
+            return;
+        }
+        var error = Exporter.TryCopyImage(image);
+        if (error != null)
+        {
+            // 复制没成就不收摊：拼接结果还在，重试和保存都点得到。
+            _bar.ShowResult($"复制到剪贴板失败：{error}", true, "重试复制", FinishToClipboard);
+            return;
+        }
         _finished = true;
         Close();
         _exitCapture();
-        if (image != null) Exporter.CopyImage(image);
     }
 
     public void FinishToFile()
     {
         var image = BuildResult();
-        if (image == null) { Cancel(); return; }
-        var path = Exporter.SaveDialog(image, App.Config);
+        if (image == null)
+        {
+            _bar.ShowResult("还没抓到任何一帧：先滚一段页面，再点保存", true);
+            return;
+        }
+        var controller = _session.Controller;
+        var path = Exporter.SaveDialog(image, App.Config, out var writeError);
+        if (writeError != null)
+        {
+            _bar.ShowResult($"保存失败：{writeError}", true, "换个位置再存", FinishToFile);
+            return;
+        }
+        if (path == null) return;   // 点了取消，长截图照旧接着拼
         _finished = true;
         Close();
         _exitCapture();
-        if (path != null && App.Config.CopyAfterSave) Exporter.CopyImage(image);
+        if (App.Config.CopyAfterSave)
+        {
+            var copyError = Exporter.TryCopyImage(image);
+            if (copyError != null) controller?.NotifyProblem("没能顺带复制", $"{copyError}；文件已经存好了");
+        }
+        controller?.NotifySaved(path);
     }
 
     public void Edit()
@@ -387,4 +414,8 @@ internal sealed class ToolbarWindow : Window
     }
 
     public void SetStatus(string text) => Dispatcher.Invoke(() => _status.Text = text);
+
+    /// <summary>出图结果挂在工具栏下面那句红/白回执上，和截图层同一个口径。</summary>
+    public void ShowResult(string text, bool bad, string? actionLabel = null, Action? action = null)
+        => Dispatcher.Invoke(() => _strip.ShowStatus(text, bad, actionLabel, action));
 }

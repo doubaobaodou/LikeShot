@@ -59,6 +59,8 @@ public sealed class CaptureOverlay : Window
         _toolbar = new ToolbarStrip(session, display) { Visibility = Visibility.Collapsed };
         _chrome.Children.Add(_toolbar);
         _toolbar.ColorPickRequested += () => _pickingColor = true;
+        // 状态行会把工具栏撑高，撑高之后要立刻重挑落点，不然多出来那截会被窗口底边裁掉。
+        _toolbar.RepositionRequested += PositionToolbar;
         BuildPropBar();
 
         var root = new Grid();
@@ -309,6 +311,8 @@ public sealed class CaptureOverlay : Window
         }
 
         _session.PointerDown(p, LeftOrRight.Left);
+        // 用户已经动手改东西了，上一条回执就该收起来，不然红色错误会一直挂着。
+        _toolbar.ClearStatus();
         if (e.ClickCount == 2) _session.DoubleClick(p);
         _host.InvalidateVisual();
     }
@@ -469,6 +473,27 @@ public sealed class CaptureOverlay : Window
     }
 
     internal void CommitPendingText() => CommitTextEditor();
+
+    /// <summary>把出图结果写在工具栏下面那句回执上；bad 时红字，旁边可以挂一个补救动作。</summary>
+    internal void ShowStatus(string text, bool bad, string? actionLabel = null, Action? action = null)
+        => Dispatcher.Invoke(() => _toolbar.ShowStatus(text, bad, actionLabel, action));
+
+    internal void ClearStatus() => Dispatcher.Invoke(_toolbar.ClearStatus);
+
+    /// <summary>
+    /// 弹系统对话框期间把遮罩层收起来：截图层是 topmost，模态框会被它压住，
+    /// 收起来又不销毁窗口，用户取消之后原样回到刚才的选区。
+    /// </summary>
+    internal void SetDialogVisible(bool visible) => Dispatcher.Invoke(() =>
+    {
+        if (visible)
+        {
+            Show();
+            Activate();
+            Keyboard.Focus(this);
+        }
+        else Hide();
+    });
 
     // ---------- 绘制 ----------
 

@@ -81,7 +81,8 @@ public partial class App : Application
             {
                 // 给自己留的验证出口：抓一张当前屏幕写盘，不弹任何界面。
                 using var shot = Capture.ScreenSnapshot.GrabVirtualDesktop();
-                Capture.Exporter.Write(shot.Image, snapPath);
+                var snapError = Capture.Exporter.TryWrite(shot.Image, snapPath);
+                if (snapError != null) Log.Write($"--snap 写盘失败：{snapError}");
                 Shutdown();
             });
     }

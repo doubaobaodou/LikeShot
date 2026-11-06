@@ -1,5 +1,5 @@
 using System.Windows;
-using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using LikeShot.UI;
 
 namespace LikeShot.Capture;
@@ -66,33 +66,51 @@ public sealed class CaptureController
         }
     }
 
-    private void OnSessionRefreshed()
-    {
-        // 覆盖层自己在 Changed 里重绘，这里只处理跨层的收尾。
-    }
-
     private void OnFinish(FinishRequest request)
     {
         if (_session == null) return;
         // 编辑框还开着就先落字：不然正打一半的字丢了，双击改字时旧字还卡在隐藏态。
         foreach (var overlay in _overlays) overlay.CommitPendingText();
+
         var image = _session.RenderResult();
+        if (image == null)
+        {
+            Say("选区已经不在屏幕上，没有可导出的图", true, "重新框选", () => _session?.ResetSelection());
+            return;
+        }
+
 
         switch (request.Mode)
         {
             case CopyMode.Clipboard:
+                var copyError = Exporter.TryCopyImage(image);
+                if (copyError != null)
+                {
+                    Say($"复制到剪贴板失败：{copyError}", true, "重试复制", () => OnFinish(request));
+                    return;
+                }
                 Abort();
-                Exporter.CopyImage(image);
                 break;
 
             case CopyMode.File:
-                var saved = Exporter.SaveDialog(image, App.Config);
-                Abort();
-                if (saved != null)
+                // 模态保存框会被 topmost 的截图层压住，先把遮罩层收起来；
+                // 存坏了不关会话，让人能在原地换个位置再存一次。
+                foreach (var overlay in _overlays) overlay.SetDialogVisible(false);
+                var saved = Exporter.SaveDialog(image, App.Config, out var saveError);
+                foreach (var overlay in _overlays) overlay.SetDialogVisible(true);
+                if (saveError != null)
                 {
-                    if (App.Config.CopyAfterSave) Exporter.CopyImage(image);
-                    NotifySaved(saved);
+                    Say($"保存失败：{saveError}", true, "换个位置再存", () => OnFinish(request));
+                    return;
                 }
+                if (saved == null) return;   // 用户自己取消：没有结果要报，回到编辑态等着
+                Abort();
+                if (App.Config.CopyAfterSave)
+                {
+                    var afterSaveCopy = Exporter.TryCopyImage(image);
+                    if (afterSaveCopy != null) NotifyProblem("没能顺带复制", $"{afterSaveCopy}；文件已经存好了");
+                }
+                NotifySaved(saved);
                 break;
 
             case CopyMode.Pin:
@@ -103,7 +121,18 @@ public sealed class CaptureController
         }
     }
 
-    public void Pin(System.Windows.Media.Imaging.BitmapSource image, Int32Rect sourceRect)
+    /// <summary>把一句回执挂在带工具栏那一层的下方；宿主找不到就不报（会话已经关了）。</summary>
+    private void Say(string text, bool bad, string? actionLabel = null, Action? action = null)
+    {
+        var host = _overlays.FirstOrDefault(o => o.OwnsToolbarAnchor) ?? _overlays.FirstOrDefault();
+        host?.ShowStatus(text, bad, actionLabel, action);
+    }
+
+    /// <summary>自检用：不走失败路径也能把回执那条渲染出来看一眼版式。</summary>
+    internal void SayForTest(string text, bool bad, string? actionLabel = null, Action? action = null) =>
+        Say(text, bad, actionLabel, action);
+
+    public void Pin(BitmapSource image, Int32Rect sourceRect)
     {
         Log.Write($"钉图 源区={sourceRect.Width}x{sourceRect.Height}@{sourceRect.X},{sourceRect.Y} 图={image.PixelWidth}x{image.PixelHeight}");
         var pin = new PinWindow(image, sourceRect, App.Config);
@@ -124,15 +153,23 @@ public sealed class CaptureController
 
     internal LongCaptureRunner? RunnerForTest => _longRunner;
 
-    public void NotifySaved(string path)
+    public void NotifySaved(string path) => _savedNotify?.Invoke(path);
+
+    /// <summary>截图层已经关掉、界面上没地方挂回执的那类失败，走托盘气泡。</summary>
+    public void NotifyProblem(string title, string message)
     {
-        if (_trayNotify == null) return;
-        _trayNotify(path);
+        Log.Write($"[提示] {title}：{message}");
+        _problemNotify?.Invoke(title, message);
     }
 
-    private Action<string>? _trayNotify;
+    private Action<string>? _savedNotify;
+    private Action<string, string>? _problemNotify;
 
-    public void SetSavedNotifier(Action<string> notifier) => _trayNotify = notifier;
+    public void SetNotifier(Action<string> saved, Action<string, string> problem)
+    {
+        _savedNotify = saved;
+        _problemNotify = problem;
+    }
 
     /// <summary>给自检用：拿到当前会话对象。</summary>
     internal CaptureSession? SessionForTest => _session;

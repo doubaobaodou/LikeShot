@@ -90,6 +90,8 @@ public sealed class PinWindow : Window
         _root.Children.Add(_toolbar);
         // 二级条里的吸管：点下去由钉图窗自己接管下一次点击，主截图层是遮罩层接的。
         _toolbar.ColorPickRequested += () => _pickingColor = true;
+        // 状态行会把工具条撑高，窗口要跟着长，不然新写的那句回执会被裁掉。
+        _toolbar.RepositionRequested += ApplyWindowSize;
 
         Content = _root;
         _session.Changed += () => Dispatcher.Invoke(() =>
@@ -172,6 +174,7 @@ public sealed class PinWindow : Window
 
         // 输入框开着时先落字；工具还是文字的话，这一下顺势再开下一个框。
         if (_pinEditor != null) CommitPinText();
+        _toolbar.ClearStatus();
 
         if (e.ClickCount == 2 && _session.Tool == ToolKind.None)
         {
@@ -476,16 +479,43 @@ public sealed class PinWindow : Window
     {
         CommitPinText();
         var image = _session.RenderResult();
+        if (image == null)
+        {
+            _toolbar.ShowStatus("这张钉图已经被缩到没有像素了，没有可导出的内容", true);
+            return;
+        }
+        // 复制没成就别关窗口：图还在这儿，重试和另存都点得到。
+        var error = Exporter.TryCopyImage(image);
+        if (error != null)
+        {
+            _toolbar.ShowStatus($"复制到剪贴板失败：{error}", true, "重试复制", FinishToClipboard);
+            return;
+        }
         Close();
-        Exporter.CopyImage(image);
     }
 
     public void SaveToDisk()
     {
         CommitPinText();
         var image = _session.RenderResult();
-        var saved = Exporter.SaveDialog(image, App.Config);
-        if (saved != null && App.Config.CopyAfterSave) Exporter.CopyImage(image);
+        if (image == null)
+        {
+            _toolbar.ShowStatus("这张钉图已经被缩到没有像素了，没有可导出的内容", true);
+            return;
+        }
+        var saved = Exporter.SaveDialog(image, App.Config, out var writeError);
+        if (writeError != null)
+        {
+            _toolbar.ShowStatus($"保存失败：{writeError}", true, "换个位置再存", SaveToDisk);
+            return;
+        }
+        if (saved == null) return;   // 点了取消，没有什么要说
+        _toolbar.ShowStatus($"已保存到 {System.IO.Path.GetFileName(saved)}", bad: false);
+        if (App.Config.CopyAfterSave)
+        {
+            var copyError = Exporter.TryCopyImage(image);
+            if (copyError != null) _toolbar.ShowStatus($"文件存好了，但没能顺带复制：{copyError}", true);
+        }
     }
 
     /// <summary>把标注按当前窗口的拉伸比例画出来，X/Y 分开，拖过边之后也不会错位。</summary>

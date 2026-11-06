@@ -67,7 +67,8 @@ public sealed class TrayIcon : IDisposable
             bool on = _autostartItem.IsChecked;
             if (!AutoStart.Set(on)) _autostartItem.IsChecked = AutoStart.IsEnabled();
             _config.RunOnStartup = _autostartItem.IsChecked;
-            AppConfig.Save(_config);
+            var error = AppConfig.Save(_config);
+            if (error != null) NotifyProblem("开机自启没存下来", error);
         };
 
         _statusItem = new MenuItem { IsEnabled = false, Style = ItemStyle() };
@@ -95,7 +96,7 @@ public sealed class TrayIcon : IDisposable
         _menu.Items.Add(exit);
 
         RefreshTexts();
-        _controller.SetSavedNotifier(NotifySaved);
+        _controller.SetNotifier(NotifySaved, NotifyProblem);
     }
 
     private void ShowMenu()
@@ -276,22 +277,17 @@ public sealed class TrayIcon : IDisposable
 
     private void BeginCapture() => Application.Current.Dispatcher.Invoke(() => _controller.BeginCapture());
 
-    private void OpenFolder()
-    {
-        try
-        {
-            Directory.CreateDirectory(_config.SaveDirectory);
-            Process.Start("explorer.exe", _config.SaveDirectory);
-        }
-        catch
-        {
-            // 目录打不开就算了，不给用户弹错误框。
-        }
-    }
+    private void OpenFolder() => FolderActions.OpenFolder(_config.SaveDirectory);
 
     public void NotifySaved(string path)
     {
         _icon.ShowBalloonTip(1200, "截图已保存", Path.GetFileName(path), WF.ToolTipIcon.Info);
+    }
+
+    /// <summary>界面已经关掉、没地方挂回执的失败才走气泡；能挂在截图层里的失败别用这条。</summary>
+    public void NotifyProblem(string title, string message)
+    {
+        _icon.ShowBalloonTip(3000, title, message, WF.ToolTipIcon.Warning);
     }
 
     private static DIcon BuildIcon()
