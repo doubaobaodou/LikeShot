@@ -68,7 +68,7 @@ QQ 开着、但你把 QQ 自己的截图热键关掉了：连着按两次之后 
 
 ## 构建
 
-需要 .NET 8 SDK（仅 Windows）。
+需要 .NET 8 SDK（仅 Windows）。发版流程和版本说明的写法见 [RELEASE.md](RELEASE.md)。
 
 ```powershell
 cd src\LikeShot
