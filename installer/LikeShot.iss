@@ -18,6 +18,9 @@ DefaultDirName={autopf}\LikeShot
 DefaultGroupName=LikeShot
 DisableProgramGroupPage=yes
 DisableWelcomePage=no
+; Inno 默认是 auto：检测到之前装过就继承旧路径、把「选择安装位置」这一页跳掉，
+; 升级时想换目录就没有入口了。这里强制显示，旧路径仍然会预填好。
+DisableDirPage=no
 ; 只给当前用户装：落到 %LOCALAPPDATA%\Programs\LikeShot，全程不弹 UAC。
 PrivilegesRequired=lowest
 OutputDir=..\dist
