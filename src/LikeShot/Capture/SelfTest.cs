@@ -24,13 +24,23 @@ public static class SelfTest
             LongRun(controller, exit);
             return;
         }
+        if (Environment.GetCommandLineArgs().Contains("--historytest"))
+        {
+            HistoryRun(exit);
+            return;
+        }
 
         var log = new StringBuilder();
         string dir = Path.Combine(Path.GetTempPath(), "likeshot-selftest");
         Directory.CreateDirectory(dir);
 
+        // 自检期间整库改道到 Temp：不然跑一轮就在他的真实历史里塞十几张测试图。
+        var store = HistoryStore.UseRootForTest(Path.Combine(dir, "history"));
+        int limitWas = App.Config.HistoryLimit;
+
         try
         {
+            App.Config.HistoryLimit = 50;
             var displays = Display.All();
             log.AppendLine($"displays={displays.Count} " +
                           string.Join(" | ", displays.Select(d => $"{d.DeviceName} {d.Bounds.Width}x{d.Bounds.Height} @{d.Scale:0.##}{(d.IsPrimary ? " primary" : "")}")));
@@ -94,8 +104,9 @@ public static class SelfTest
 
             var image = session.RenderResult();
             string outPath = Path.Combine(dir, "annotated.png");
-            Exporter.Write(image, outPath);
-            log.AppendLine($"rendered={image.PixelWidth}x{image.PixelHeight} bytes={new FileInfo(outPath).Length}");
+            var writeError = Exporter.TryWrite(image!, outPath);
+            log.AppendLine(writeError != null ? $"导出写盘失败：{writeError}"
+                : $"rendered={image!.PixelWidth}x{image.PixelHeight} bytes={new FileInfo(outPath).Length}");
 
             // 3) 撤销一次
             int before = session.Layer.Items.Count;
@@ -104,16 +115,90 @@ public static class SelfTest
 
             controller.Abort();
 
-            // 4) 长截图拼接：造一个已知滚动量的两帧
+            // 4) 退化选区不该成图。以前这里退回整张桌面快照，「只想取消这一下」会变成「导出一张全屏」。
+            //    要验这条得用一个真的没框过选区的会话：Abort 只关窗口，旧会话的选区还挂着。
+            using (var blank = ScreenSnapshot.GrabVirtualDesktop())
+            {
+                var empty = new CaptureSession(blank, displays, 1.0);
+                log.AppendLine($"空选区成图：{(empty.RenderResult() == null ? "null（对）" : "非 null（错：会导出整张桌面）")}");
+            }
+
+            // 5) 出图必须给结果：坏路径要还回那句原因，而不是把异常甩给全局兜底把会话崩掉。
+            if (image != null)
+            {
+                var writeFailure = Exporter.TryWrite(image, Path.Combine(dir, "坏名字?.png"));
+                log.AppendLine($"写盘失败要能报原因：{(writeFailure == null ? "没报错（不对）" : $"报了「{writeFailure}」")}");
+                var copyFailure = Exporter.TryCopyImage(image);
+                log.AppendLine($"复制到剪贴板：{(copyFailure == null ? "成功" : $"失败「{copyFailure}」")}");
+            }
+
+            // 6) 走一次真实出口（钉图）：图得进历史库，而且读得回来。
+            int entriesBefore = store.Entries.Count;
+            controller.BeginCapture();
+            var s2 = controller.SessionForTest;
+            if (s2 != null)
+            {
+                s2.PointerDown(new Point(ox, oy), LeftOrRight.Left);
+                s2.PointerMove(new Point(ox + 200, oy + 140));
+                s2.PointerUp(new Point(ox + 200, oy + 140));
+                s2.Finish(CopyMode.Pin);
+            }
+            FlushIdle();   // 入库排在 ContextIdle，等消息泵转到那一级才真落盘
+            var newest = store.Entries.FirstOrDefault();
+            log.AppendLine($"完成截图入库：新增={store.Entries.Count - entriesBefore}（应为 1） " +
+                           $"最新={(newest?.Source)}{(newest == null ? "" : $" {newest.Width}x{newest.Height}")} " +
+                           $"原图读回={(newest != null && store.LoadFull(newest) != null)} 缩略图读回={(newest != null && store.Thumbnail(newest) != null)}");
+            log.AppendLine($"关掉这一轮开出来的钉图窗：{ClosePins()} 扇");
+
+            // 7) 再标注入口：把一张图丢回截图层，选区就该正好是那张图。
+            controller.Abort();
+            var replayImage = MakeTestImage(800, 500, Color.FromRgb(0x30, 0x60, 0xF0));
+            controller.BeginReplay(replayImage);
+            var s3 = controller.SessionForTest;
+            if (s3 == null) log.AppendLine("再标注：会话没起来（不对）");
+            else
+            {
+                var rect = s3.FinalRect();
+                s3.SetTool(ToolKind.Shape);
+                s3.SetShapeKind(ShapeKind.Rect);
+                s3.PointerDown(new Point(rect.X + 20, rect.Y + 20), LeftOrRight.Left);
+                s3.PointerMove(new Point(rect.X + 220, rect.Y + 160));
+                s3.PointerUp(new Point(rect.X + 220, rect.Y + 160));
+                var replayOut = s3.RenderResult();
+                log.AppendLine($"再标注：选区={rect.Width}x{rect.Height}（应为 800x500） 覆盖层={controller.OverlaysForTest.Count} 层 " +
+                               $"标注={s3.Layer.Items.Count} 成图={(replayOut?.PixelWidth ?? 0)}x{(replayOut?.PixelHeight ?? 0)}");
+            }
+            controller.Abort();
+
+            // 8) 钉图窗的标注链路：合成一张图钉上去，画一笔，成图尺寸要对得上。
+            var primary = displays.FirstOrDefault(d => d.IsPrimary) ?? displays[0];
+            var pin = new LikeShot.UI.PinWindow(
+                MakeTestImage(600, 400, Color.FromRgb(0xC0, 0x30, 0x30)),
+                new Int32Rect(primary.Bounds.X + 160, primary.Bounds.Y + 160, 600, 400), App.Config);
+            pin.ShowPinned();
+            pin.Session.SetTool(ToolKind.Brush);
+            pin.Session.PointerDown(new Point(primary.Bounds.X + 200, primary.Bounds.Y + 200), LeftOrRight.Left);
+            pin.Session.PointerMove(new Point(primary.Bounds.X + 300, primary.Bounds.Y + 260));
+            pin.Session.PointerMove(new Point(primary.Bounds.X + 380, primary.Bounds.Y + 220));
+            pin.Session.PointerUp(new Point(primary.Bounds.X + 380, primary.Bounds.Y + 220));
+            var pinOut = pin.Session.RenderResult();
+            log.AppendLine($"钉图窗标注：标注={pin.Session.Layer.Items.Count} 成图={pinOut?.PixelWidth}x{pinOut?.PixelHeight}（应为 600x400）");
+            pin.Close();
+
+            // 9) 长截图拼接：造一个已知滚动量的两帧
             var stitchReport = StitchingCheck();
             log.AppendLine(stitchReport);
 
-            // 5) 热键归属：现在 QQ 在跑吗
+            // 10) 热键归属：现在 QQ 在跑吗
             log.AppendLine(HotkeyCheck());
         }
         catch (Exception ex)
         {
             log.AppendLine("FAILED: " + ex);
+        }
+        finally
+        {
+            App.Config.HistoryLimit = limitWas;
         }
 
         string report = Path.Combine(dir, "report.txt");
@@ -124,8 +209,110 @@ public static class SelfTest
     }
 
     /// <summary>
-    /// 长截图实跑：自己造一张「每条色带颜色都唯一」的可滚动页面，
-    /// 让它自动滚到底，把拼出来的长图写盘。事后逐行认色就能判定不重不漏，
+    /// ContextIdle 排队的入库要等消息泵转到那一级才跑；
+    /// 用同优先级的空 Invoke 排一次队，就等于把它冲干净了。
+    /// </summary>
+    private static void FlushIdle() =>
+        System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+            () => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+
+    private static int ClosePins()
+    {
+        var pins = System.Windows.Application.Current.Windows
+            .OfType<LikeShot.UI.PinWindow>().ToArray();
+        foreach (var pin in pins) pin.Close();
+        return pins.Length;
+    }
+
+    private static System.Windows.Media.Imaging.BitmapSource MakeTestImage(
+        int width, int height, System.Windows.Media.Color color) =>
+        LikeShot.Drawing.RenderSurface.ToBitmap(width, height,
+            dc => dc.DrawRectangle(new SolidColorBrush(color), null, new Rect(0, 0, width, height)));
+
+    /// <summary>
+    /// 历史库实跑：往 Temp 的独立目录里灌图，验入库、淘汰（收藏不参与）、
+    /// 重开还能认出来、搜索口径、删除和清空。绝不碰他真实的历史目录。
+    /// </summary>
+    public static async void HistoryRun(Action exit)
+    {
+        var log = new StringBuilder();
+        string root = Path.Combine(Path.GetTempPath(), "likeshot-history-test");
+        string report = Path.Combine(Path.GetTempPath(), "likeshot-selftest", "history-report.txt");
+        int limitWas = App.Config.HistoryLimit;
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(report)!);
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+            Directory.CreateDirectory(root);
+            App.Config.HistoryLimit = 5;
+            var store = HistoryStore.UseRootForTest(root);
+
+            // 1) 入库：原图、缩略图、索引三样都得有
+            var first = store.Add(MakeTestImage(640, 400, Color.FromRgb(10, 20, 30)), HistoryStore.SourceCapture);
+            var thumb = first == null ? null : store.Thumbnail(first);
+            log.AppendLine($"入库：条目={(first == null ? "没有（不对）" : "有")} 原图在盘={(first != null && File.Exists(store.FullPathOf(first)))} " +
+                           $"缩略图={thumb?.PixelWidth}x{thumb?.PixelHeight}（长边应 ≤420）");
+
+            // 2) 淘汰：连灌过上限，收藏的那张必须活着。
+            //    注意上限是「每次入库都当场兑现」的，所以要挑一张此刻还在库里的最旧的去收藏，
+            //    不能拿最早灌进去的那张——它很可能早就被自己的上限挤掉了。
+            for (int i = 0; i < 6; i++)
+            {
+                store.Add(MakeTestImage(300, 200, Color.FromRgb((byte)(i * 30), 90, 140)), HistoryStore.SourceLong);
+                await Task.Delay(12);   // 文件名带毫秒，隔一点免得挤在同一毫秒撞名
+            }
+            var oldestAlive = store.Entries[^1];
+            store.SetFavorite(oldestAlive.Id, true);
+            for (int i = 0; i < 4; i++) { store.Add(MakeTestImage(200, 120, Colors.Black), HistoryStore.SourcePin); await Task.Delay(12); }
+
+            log.AppendLine($"上限 5 张、收藏不参与：现在 {store.Entries.Count} 张（应为 6＝5 非收藏 + 1 收藏） " +
+                           $"非收藏={store.Count(false)} 收藏={store.FavoriteCount}");
+            log.AppendLine($"最旧那张被标了收藏所以还在={store.Entries.Any(e => e.Id == oldestAlive.Id)}（应为 True）");
+            log.AppendLine($"库里每条的来源={string.Join(",", store.Entries.Select(e => e.Source))}");
+
+            // 3) 换一个实例读同一个目录：模拟重启
+            var reloaded = new HistoryStore(root);
+            log.AppendLine($"重开一遍读到 {reloaded.Entries.Count} 条（应为 {store.Entries.Count}） " +
+                           $"原图都在={reloaded.Entries.All(e => File.Exists(store.FullPathOf(e)))} " +
+                           $"收藏状态认得出={reloaded.Entries.Any(e => e.Favorite)}");
+
+            // 4) 搜索口径：字面、来源、只看收藏
+            int width = reloaded.Entries[0].Width;
+            log.AppendLine($"搜索「长截图」={reloaded.Entries.Count(e => HistoryStore.Matches(e, "长截图", null, false))} " +
+                           $"搜尺寸「{width}」={reloaded.Entries.Count(e => HistoryStore.Matches(e, width.ToString(), null, false))} " +
+                           $"来源筛「钉图」={reloaded.Entries.Count(e => HistoryStore.Matches(e, "", "钉图", false))} " +
+                           $"只看收藏={reloaded.Entries.Count(e => HistoryStore.Matches(e, "", null, true))}");
+
+            // 5) 删一条、再清空：文件要跟着从盘上走
+            var victim = reloaded.Entries.First(e => e.Favorite);
+            string victimPath = store.FullPathOf(victim);
+            int removedOne = store.Remove([victim.Id]);
+            log.AppendLine($"删收藏那张：删了={removedOne} 原图还在={File.Exists(victimPath)} 缩略图还在={File.Exists(Path.Combine(root, victim.Thumb))}（都应为 False）");
+
+            int cleared = store.Clear(true);
+            bool anyPngLeft = Directory.EnumerateFiles(root, "*.png", SearchOption.AllDirectories).Any();
+            log.AppendLine($"清空：删了 {cleared} 条 剩余={store.Entries.Count} 盘上还有图={anyPngLeft} 索引还在={File.Exists(Path.Combine(root, "index.json"))}");
+            log.AppendLine($"一路的入库失败记录={store.LastError ?? "无（应为无）"}");
+        }
+        catch (Exception ex)
+        {
+            log.AppendLine("FAILED: " + ex);
+        }
+        finally
+        {
+            App.Config.HistoryLimit = limitWas;
+        }
+
+        File.WriteAllText(report, log.ToString());
+        Console.Out.WriteLine(log);
+        Console.Out.WriteLine("REPORT " + report + "  DIR " + root);
+        exit();
+    }
+
+    /// <summary>
+    /// 长截图实跑：自己造一张「每一行颜色都不重复」的可滚动页面，
+    /// 让它自动滚到底，把拼出来的长图写盘，再拿页面自己的可滚总高核对拼得对不对。
     /// 不用靠肉眼盯着截图猜，也不用借浏览器（它会弹同步授权框，点也不是不点也不是）。
     /// </summary>
     private static async void LongRun(CaptureController controller, Action exit)
@@ -164,24 +351,46 @@ public static class SelfTest
             int seed = runner.AppendedTotal;
             log.AppendLine($"首帧高度={seed}");
 
-            // 自动滚到「连续几秒不再长高」为止，最多 40 秒；实跑的判据是长图本身，不是秒数。
+            // 自动滚到「页面自己报到底了、且画布不再长高」为止，最多 90 秒。
+            // 40 秒那版是掐着秒表收的，页面还没滚完就被判成「少了」——判据得是页面到底，不是秒数。
             runner.ToggleAutoScroll();
-            int last = runner.AppendedTotal, stuck = 0;
-            for (int i = 0; i < 40 && stuck < 4; i++)
+            int last = runner.AppendedTotal, stuck = 0, ticks = 0;
+            for (; ticks < 90; ticks++)
             {
                 await Task.Delay(1000);
                 int now = runner.AppendedTotal;
-                log.AppendLine($"t+{i + 1}s 高度={now}");
+                var (offset, scrollable) = page.ScrollOffsets();
                 stuck = now > last ? 0 : stuck + 1;
                 last = now;
+                bool atBottom = offset >= scrollable - 1;
+                if (ticks % 10 == 0 || atBottom)
+                    log.AppendLine($"t+{ticks + 1}s 画布={now} 页面已滚={offset:0}/{scrollable:0} DIP");
+                if (now >= LongStitcher.MaxHeight) { log.AppendLine("撞到长度上限"); break; }
+                if (atBottom && stuck >= 2) break;
             }
+            log.AppendLine($"跑了 {ticks + 1} 秒收工");
 
             var image = runner.BuildResult();
             if (image != null)
             {
                 string path = Path.Combine(dir, "long.png");
-                Exporter.Write(image, path);
-                log.AppendLine($"成品={image.PixelWidth}x{image.PixelHeight} bytes={new FileInfo(path).Length} -> {path}");
+                var longWriteError = Exporter.TryWrite(image, path);
+                log.AppendLine(longWriteError != null ? $"长图写盘失败：{longWriteError}"
+                    : $"成品={image.PixelWidth}x{image.PixelHeight} bytes={new FileInfo(path).Length} -> {path}");
+
+                // 页面自己知道它能滚多远：拼出来的高度对不上这个数，就是重复贴（超了）
+                // 或者漏贴（不到）。以前只报「滚没滚」，看不出这两件事。
+                var (extent, viewport) = page.ScrollExtents();
+                double scale = Display.All().First(d => d.IsPrimary).Scale;
+                int expected = (int)Math.Round(extent * scale);
+                int got = image.PixelHeight;
+                int off = got - expected;
+                bool fits = Math.Abs(off) <= Math.Max(200, expected / 10);
+                int lines = runner.StitchDiag.Split('\n').Length;
+                int zeroVotes = runner.StitchDiag.Split('\n').Count(l => l.Contains("票=0"));
+                log.AppendLine($"应得高度={expected}px（页面可滚总高，视口 {viewport:0} DIP） 实拼={got}px 差={off} " +
+                               $"判定={(fits ? "对得上" : "对不上：超了是重复贴，少了是漏贴")}");
+                log.AppendLine($"认不出重叠量、只能整帧追加的帧数={zeroVotes}/{lines}");
             }
 
             runner.Cancel();
@@ -209,12 +418,16 @@ public static class SelfTest
     internal sealed class LongPageWindow : Window
     {
         public const int LineCount = 250;
+        private readonly ScrollViewer _scroll = new();
 
         public LongPageWindow()
         {
             WindowStyle = WindowStyle.None;
             ResizeMode = ResizeMode.NoResize;
             ShowInTaskbar = false;
+            // 必须置顶：从命令行拉起来拿不到前台权限，不置顶就会被浏览器压在下面，
+            // 于是「长截图实跑」截的其实是桌面现状——前两轮就是这么把真实网页拼进长图的。
+            Topmost = true;
             Title = "LikeShot 长页测试";
             Left = SystemParameters.VirtualScreenLeft;
             Top = SystemParameters.VirtualScreenTop;
@@ -226,27 +439,166 @@ public static class SelfTest
                 band.Children.Add(new Border
                 {
                     Height = 14 + i % 7 * 6,
-                    Background = new SolidColorBrush(LineColor(i)),
+                    // 纵向大跨度渐变：一条带里每一行都要不同。
+                    // 整片纯色时同一颜色会连续重复几十行，逐行哈希的「只认出现过一次的行」会把它们全滤掉，
+                    // 拼接器认不出重叠量，只能整帧追加——那样这份实跑就只验得出「滚没滚」，验不出「不重不漏」。
+                    Background = new LinearGradientBrush(TopColor(i), BottomColor(i), 90),
                 });
 
-            var dock = new DockPanel { Background = Brushes.White };
             var head = new Border { Height = 60, Background = new SolidColorBrush(Color.FromRgb(200, 30, 30)) };
             var foot = new Border { Height = 40, Background = new SolidColorBrush(Color.FromRgb(30, 200, 30)) };
+            var dock = new DockPanel { Background = Brushes.White };
             DockPanel.SetDock(head, Dock.Top);
             DockPanel.SetDock(foot, Dock.Bottom);
-            var scroll = new ScrollViewer
-            {
-                VerticalScrollBarVisibility = ScrollBarVisibility.Visible,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                Content = band,
-            };
+            _scroll.VerticalScrollBarVisibility = ScrollBarVisibility.Visible;
+            _scroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            _scroll.Content = band;
             dock.Children.Add(head);
             dock.Children.Add(foot);
-            dock.Children.Add(scroll);
+            dock.Children.Add(_scroll);
             Content = dock;
         }
 
-        public static Color LineColor(int index) => Color.FromRgb((byte)(index + 1), 120, 120);
+        /// <summary>页面在 DIP 下的可滚总高和视口高——用来核对拼出来的长图对不对。</summary>
+        public (double Extent, double Viewport) ScrollExtents() => (_scroll.ExtentHeight, _scroll.ViewportHeight);
+
+        /// <summary>此刻已经滚了多远、还能滚多远（DIP）：当「真实滚动量」的尺子用。</summary>
+        public (double Offset, double Scrollable) ScrollOffsets() => (_scroll.VerticalOffset, _scroll.ScrollableHeight);
+
+        private static Color TopColor(int i) =>
+            Color.FromRgb((byte)(i * 37 + 5), (byte)(i * 53 + 90), (byte)(i * 71 + 170));
+
+        private static Color BottomColor(int i) =>
+            Color.FromRgb((byte)(i * 37 + 92), (byte)(i * 53 + 24), (byte)(i * 71 + 44));
+    }
+
+    /// <summary>
+    /// 历史页实跑：不走鼠标，把这一页的筛选、多选、卡片上的每个动作都点一遍，
+    /// 看界面当时说的那句回执和库里的真实状态对不对得上。库改道 Temp，不动他真实的历史。
+    /// </summary>
+    public static async void HistoryUiRun(CaptureController controller, Action exit)
+    {
+        var log = new StringBuilder();
+        string dir = Path.Combine(Path.GetTempPath(), "likeshot-selftest");
+        Directory.CreateDirectory(dir);
+        string root = Path.Combine(dir, "history-ui");
+        int limitWas = App.Config.HistoryLimit;
+        LikeShot.UI.SettingsWindow? win = null;
+
+        try
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+            var store = HistoryStore.UseRootForTest(root);
+            App.Config.HistoryLimit = 50;
+            for (int i = 0; i < 6; i++)
+            {
+                store.Add(TestTile(600 + i * 40, 400, i),
+                    i % 2 == 0 ? HistoryStore.SourceCapture : HistoryStore.SourceLong);
+                await Task.Delay(12);
+            }
+
+            win = new LikeShot.UI.SettingsWindow(App.Config);
+            win.Show();
+            win.SelectSection(LikeShot.UI.SettingsWindow.HistorySectionIndex);
+            log.AppendLine($"进页面：卡片={win.HistoryCardCount}（应为 6） 计数「{win.HistoryCountTextForTest}」");
+
+            win.HistorySourceForTest(HistoryStore.SourcePin);
+            log.AppendLine($"来源筛「钉图」：卡片={win.HistoryCardCount}（应为 0） 空态在不在={win.HistoryShowsEmptyNote}");
+            win.HistorySourceForTest("全部");
+
+            win.HistorySearchForTest(HistoryStore.SourceLong);
+            log.AppendLine($"搜「长截图」：卡片={win.HistoryCardCount}（应为 3）");
+            win.HistorySearchForTest("400");
+            log.AppendLine($"搜尺寸「400」：卡片={win.HistoryCardCount}（应为 6）");
+            win.HistorySearchForTest("");
+
+            log.AppendLine($"点复制：回执「{win.HistoryDoForTest("copy", 0)}」 剪贴板里有图={Clipboard.ContainsImage()}");
+            log.AppendLine($"点钉图：回执「{win.HistoryDoForTest("pin", 0)}」 关掉了 {ClosePins()} 扇钉图窗");
+            log.AppendLine($"点收藏：回执「{win.HistoryDoForTest("favorite", 0)}」 库里收藏={store.FavoriteCount}（应为 1）");
+
+            win.HistoryPickForTest(0, false);
+            win.HistoryPickForTest(1, true);
+            win.HistoryPickForTest(2, true);
+            int selected = win.HistorySelectedCount;
+            int beforeDelete = store.Entries.Count;
+            string deleteNote = win.HistoryDoForTest("deleteSelected", 0);
+            log.AppendLine($"多选 {selected} 张后批删（应为 3）：回执「{deleteNote}」 库里 {beforeDelete} → {store.Entries.Count}");
+
+            // 删除走的是事件异步刷新，不等一轮消息泵就按下标取卡片，取到的会是刚删掉那张——
+            // 界面会如实说「文件已经不在库里了」。这里先等刷新，再验真正的再标注。
+            await Task.Delay(400);
+            string replayNote = win.HistoryDoForTest("replay", 0);
+            await Task.Delay(800);
+            var session = controller.SessionForTest;
+            log.AppendLine($"点再标注：回执「{replayNote}」 会话起来={session != null} " +
+                           $"选区={(session == null ? "-" : $"{session.FinalRect().Width}x{session.FinalRect().Height}")} " +
+                           $"覆盖层={controller.OverlaysForTest.Count} 层 设置窗最小化={win.WindowState}");
+            controller.Abort();
+            await Task.Delay(300);
+
+            store.Clear(true);
+            await Task.Delay(400);   // 入库/清空走 Changed 事件异步刷新，给它一轮消息泵
+            log.AppendLine($"清空后：卡片={win.HistoryCardCount} 空态在不在={win.HistoryShowsEmptyNote}");
+        }
+        catch (Exception ex)
+        {
+            log.AppendLine("FAILED: " + ex);
+        }
+        finally
+        {
+            App.Config.HistoryLimit = limitWas;
+            win?.Close();
+        }
+
+        string report = Path.Combine(dir, "history-ui-report.txt");
+        File.WriteAllText(report, log.ToString());
+        Console.Out.WriteLine(log);
+        Console.Out.WriteLine("REPORT " + report);
+        exit();
+    }
+
+    /// <summary>
+    /// 版式取证：把「失败回执」真的挂到截图层上渲染一张出来。
+    /// 这是本轮新加的一面，光读代码看不出红字会不会把工具栏撑到屏幕外、重试按钮点不点得到。
+    /// </summary>
+    public static async void StatusShotRun(CaptureController controller, Action exit)
+    {
+        var log = new StringBuilder();
+        string dir = Path.Combine(Path.GetTempPath(), "likeshot-selftest");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            controller.BeginCapture();
+            var session = controller.SessionForTest;
+            if (session == null) throw new InvalidOperationException("截图会话没起来");
+            var d = Display.All().First(x => x.IsPrimary);
+            int x0 = d.Bounds.X + 400, y0 = d.Bounds.Y + 300;
+            session.PointerDown(new Point(x0, y0), LeftOrRight.Left);
+            for (int i = 1; i <= 6; i++) session.PointerMove(new Point(x0 + i * 60, y0 + i * 40));
+            session.PointerUp(new Point(x0 + 360, y0 + 240));
+            await Task.Delay(500);
+
+            controller.SayForTest("复制到剪贴板失败：剪贴板被别的程序占着，稍一下再复制", true, "重试复制", () => { });
+            await Task.Delay(500);
+            var overlay = controller.OverlaysForTest.First();
+            var badError = RenderWindowToFile(overlay, Path.Combine(dir, "status-bad.png"));
+            log.AppendLine($"红字回执挂上：渲染={(badError ?? "成功")} 整窗={overlay.ActualWidth:0}x{overlay.ActualHeight:0} DIP");
+
+            controller.SayForTest("已保存到 截图_20261106_163012.png", false);
+            await Task.Delay(400);
+            var goodError = RenderWindowToFile(overlay, Path.Combine(dir, "status-good.png"));
+            log.AppendLine($"白字回执挂上：渲染={(goodError ?? "成功")}");
+
+            controller.Abort();
+        }
+        catch (Exception ex)
+        {
+            log.AppendLine("FAILED: " + ex);
+        }
+
+        File.WriteAllText(Path.Combine(dir, "status-report.txt"), log.ToString());
+        Console.Out.WriteLine(log);
+        exit();
     }
 
     /// <summary>
@@ -261,6 +613,9 @@ public static class SelfTest
         string dir = Path.Combine(Path.GetTempPath(), "likeshot-selftest");
         Directory.CreateDirectory(dir);
         const string testChord = "Ctrl+Alt+Shift+F9";
+        // 一个一定在跑、又永远不可能接热键的进程（会话 0，没有窗口）：
+        // 拿它当让位对象，D 那条就不依赖本机装没装 QQ、也不依赖 QQ 的截图热键开着没开。
+        string[] deadYieldNames = ["services"];
 
         var config = App.Config;
         var arbiter = App.Arbiter;
@@ -269,19 +624,24 @@ public static class SelfTest
         {
             string realChord = config.CaptureChord;
             string[] realYield = config.YieldToProcesses.ToArray();
-            log.AppendLine($"让位进程在跑：{string.Join(",", realYield.Where(n => Process.GetProcessesByName(n).Length > 0))}");
+            var aliveNames = realYield.Where(n => Process.GetProcessesByName(n).Length > 0).ToArray();
+            log.AppendLine($"让位进程在跑：{(aliveNames.Length == 0 ? "无（A、C 两条只作参考，判定要看 D）" : string.Join(",", aliveNames))}");
 
             try
             {
                 config.CaptureChord = testChord;
                 arbiter.ApplyConfig(config);
 
-                // A) QQ 在名单里 → 我们不该接
+                // A) QQ 在名单里 → 我们不该接。本机 QQ 没跑的话这条测不到让位，只报事实不装成断言。
                 arbiter.SetYieldNames(realYield);
                 await Settle();
                 PressChord();
                 await Settle();
-                log.AppendLine($"A 名单含 QQ：状态「{arbiter.StatusText}」 我们的截图层={controller.SessionForTest != null}（应为 False）");
+                string expectA = aliveNames.Length == 0 ? "本机没有名单里的进程，这条测不到" : "应为 False";
+                log.AppendLine($"A 名单含 {string.Join("/", realYield)}：状态「{arbiter.StatusText}」 " +
+                               $"我们的截图层={controller.SessionForTest != null}（{expectA}）");
+                log.AppendLine($"A2 让位之后开始观察它响没响：{arbiter.YieldDiagForTest}");
+                if (controller.SessionForTest != null) controller.Abort();
 
                 // B) 名单换成不存在的进程 → 试探到没人注册就该由我们接管
                 arbiter.SetYieldNames(["__NoSuchProcessForTest"]);
@@ -292,6 +652,36 @@ public static class SelfTest
                 bool took = controller.SessionForTest != null;
                 log.AppendLine($"B 名单不含 QQ：我们的截图层={took}（应为 True）");
                 if (took) controller.Abort();
+                await Task.Delay(400);
+
+                // D) 这条是新的让位判定的正解，而且不依赖本机装没装 QQ：
+                //    名单里放一个「一定在跑、但永远不可能接热键」的进程（services.exe，会话 0，没有窗口）。
+                //    老逻辑是它活着就永远让位，结果这个键谁都不响应；
+                //    现在第一下让位并观察，第二下判定它不接、当场接管，第三下开始就是即刻的。
+                config.CaptureChord = testChord;
+                arbiter.ApplyConfig(config);
+                arbiter.SetYieldNames(deadYieldNames);
+                await Settle();
+                log.AppendLine($"D 名单={deadYieldNames[0]}（在跑={Process.GetProcessesByName(deadYieldNames[0]).Length > 0}）：{arbiter.YieldDiagForTest}");
+
+                PressChord();
+                await Settle();
+                bool dFirst = controller.SessionForTest != null;
+                log.AppendLine($"D 第一下（让位 + 观察）：我们的截图层={dFirst}（应为 False） {arbiter.YieldDiagForTest}");
+                if (dFirst) controller.Abort();
+
+                PressChord();
+                await Settle();
+                bool dSecond = controller.SessionForTest != null;
+                log.AppendLine($"D 第二下（判定它不接，补上这一张）：我们的截图层={dSecond}（应为 True） {arbiter.YieldDiagForTest}");
+                if (dSecond) controller.Abort();
+                await Task.Delay(400);
+
+                PressChord();
+                await Settle();
+                bool dThird = controller.SessionForTest != null;
+                log.AppendLine($"D 第三下（改判之后即刻接管）：我们的截图层={dThird}（应为 True） {arbiter.YieldDiagForTest}");
+                if (dThird) controller.Abort();
                 await Task.Delay(400);
 
                 // C) 让位名单清空、键位换回 Ctrl+Alt+A：QQ 真的注册着它，试探必须判「被占用」。
@@ -424,8 +814,81 @@ public static class SelfTest
         exit();
     }
 
-    /// <summary>--selftest --settingsui：把设置窗口开在那里不退出，方便抓屏看版式。</summary>
-    public static void ShowSettings() => App.OpenSettings();
+    /// <summary>
+    /// --selftest --settingsui：把设置窗口开在那里不退出，方便抓屏看版式。
+    /// 带 --seedhistory 就先往 Temp 的独立库里灌一份假条目（各种来源、尺寸、收藏），
+    /// 不然历史那一页永远是空的，看不出卡片排得对不对；带 --shot 就自己抓一张再收摊。
+    /// </summary>
+    public static async void ShowSettings()
+    {
+        var args = Environment.GetCommandLineArgs();
+        int section = args.Contains("--historyui") ? LikeShot.UI.SettingsWindow.HistorySectionIndex : 0;
+
+        if (args.Contains("--seedhistory"))
+        {
+            string root = Path.Combine(Path.GetTempPath(), "likeshot-history-ui");
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+            var store = HistoryStore.UseRootForTest(root);
+            var kinds = new[] { HistoryStore.SourceCapture, HistoryStore.SourceLong, HistoryStore.SourcePin, HistoryStore.SourceReplay };
+            var sizes = new (int w, int h)[] { (1440, 900), (900, 1600), (2400, 1200), (640, 480), (1920, 1080), (760, 1400) };
+            for (int i = 0; i < 14; i++)
+            {
+                var (w, h) = sizes[i % sizes.Length];
+                store.Add(TestTile(w, h, i), kinds[i % kinds.Length]);
+                await Task.Delay(10);
+            }
+            var favorite = store.Entries[^1];
+            store.SetFavorite(favorite.Id, true);
+            Log.Write($"取证用历史库灌了 {store.Entries.Count} 张，目录={root}");
+        }
+
+        App.OpenSettings(section);
+        var window = System.Windows.Application.Current.Windows.OfType<LikeShot.UI.SettingsWindow>().FirstOrDefault();
+        window?.RaiseTopmostForTest();
+
+        if (!args.Contains("--shot")) return;
+        await Task.Delay(2500);   // 等缩略图逐张解完、版式落定
+        Log.Write($"取证窗口位置 DIP={window?.Left:0},{window?.Top:0} 尺寸={window?.ActualWidth:0}x{window?.ActualHeight:0} " +
+                  $"已显示={window?.IsVisible} 已加载={window?.IsLoaded} 置顶={window?.Topmost} 进的第 {section} 页");
+
+        string shot = Path.Combine(Path.GetTempPath(), "likeshot-selftest", "settings.png");
+        Directory.CreateDirectory(Path.GetDirectoryName(shot)!);
+        var error = RenderWindowToFile(window, shot);
+        Log.Write(error == null ? $"版式取证已渲染 {shot}" : $"版式取证渲染失败：{error}");
+        Application.Current.Shutdown();
+    }
+
+    /// <summary>
+    /// 版式取证直接渲染那扇窗的视觉树，而不是截整张桌面：
+    /// 从命令行拉起来的进程拿不到前台权限，截屏只会拍到压在上面的浏览器，取证就白做了。
+    /// </summary>
+    private static string? RenderWindowToFile(Window? window, string path)
+    {
+        if (window == null) return "设置窗口没开起来";
+        int width = (int)Math.Ceiling(window.ActualWidth), height = (int)Math.Ceiling(window.ActualHeight);
+        if (width < 10 || height < 10) return $"窗口尺寸没落定 {width}x{height}";
+        var target = new System.Windows.Media.Imaging.RenderTargetBitmap(width, height, 96, 96,
+            System.Windows.Media.PixelFormats.Pbgra32);
+        target.Render(window);
+        target.Freeze();
+        return Exporter.TryWrite(target, path);
+    }
+
+    /// <summary>取证用的假图：一块斜向渐变 + 序号色块，缩略图之间一眼能分辨。</summary>
+    private static System.Windows.Media.Imaging.BitmapSource TestTile(int width, int height, int index)
+    {
+        var from = Color.FromRgb((byte)(40 + index * 15), 90, (byte)(200 - index * 11));
+        var to = Color.FromRgb(240, (byte)(60 + index * 13), (byte)(90 + index * 9));
+        return LikeShot.Drawing.RenderSurface.ToBitmap(width, height, dc =>
+        {
+            var brush = new LinearGradientBrush(from, to, 45);
+            dc.DrawRectangle(brush, null, new Rect(0, 0, width, height));
+            dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(250, 250, 250)), null,
+                new Rect(width * 0.12, height * 0.12, width * 0.24, height * 0.12));
+            dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(120, 0, 0, 0)), null,
+                new Rect(width * 0.12, height * 0.42, width * 0.6, height * 0.3));
+        });
+    }
 
     /// <summary>
     /// 造一个「真实页面」来验拼接：大片纯白 + 零星文字行 + 固定表头/底栏。
@@ -523,7 +986,11 @@ public static class SelfTest
     {
         var qq = Process.GetProcessesByName("QQ").Length;
         var tim = Process.GetProcessesByName("Tim").Length;
-        var free = LikeShot.Hotkeys.ChordProbe.IsFree(LikeShot.Hotkeys.Chord.Parse(new AppConfig().CaptureChord));
-        return $"hotkey: QQ进程={qq} TIM进程={tim} 本机可注册={free}（QQ 在跑时应为 True 之外都算异常）";
+        var chord = LikeShot.Hotkeys.Chord.Parse(new AppConfig().CaptureChord);
+        var free = LikeShot.Hotkeys.ChordProbe.IsFree(chord);
+        return "hotkey: " +
+               $"QQ进程={qq} TIM进程={tim} 本机可注册={free}（QQ 在跑时应为 True 之外都算异常） " +
+               $"托盘那句状态=「{App.Arbiter?.StatusText ?? "仲裁器没起来"}」 " +
+               $"判定明细={App.Arbiter?.YieldDiagForTest ?? "无"}";
     }
 }
