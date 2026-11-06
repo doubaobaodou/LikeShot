@@ -171,6 +171,41 @@ internal static class Win32
     [DllImport("user32.dll")]
     public static extern bool SetWindowPos(nint hWnd, nint after, int x, int y, int cx, int cy, uint flags);
 
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(nint hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool BringWindowToTop(nint hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+    [DllImport("kernel32.dll")]
+    public static extern uint GetCurrentThreadId();
+
+    /// <summary>
+    /// 顶到最前并且真的把键盘焦点抢过来。系统有个「前台锁」：不是最后一个收到输入的进程，
+    /// 就不许它换前台。所以从键盘钩子里叫起来的全屏层常常只盖得住、抢不到焦点，
+    /// Enter / Esc 全打在原来那个窗口上。先临时挂到对方线程的输入队列上再叫，才叫得动。
+    /// </summary>
+    public static bool ForceForeground(nint hWnd)
+    {
+        nint fg = GetForegroundWindow();
+        if (fg == hWnd) return true;
+        uint ours = GetCurrentThreadId();
+        uint other = fg == nint.Zero ? 0u : GetWindowThreadProcessId(fg, out _);
+        bool attached = other != 0 && other != ours && AttachThreadInput(ours, other, true);
+        try
+        {
+            BringWindowToTop(hWnd);
+            return SetForegroundWindow(hWnd);
+        }
+        finally
+        {
+            if (attached) AttachThreadInput(ours, other, false);
+        }
+    }
+
     public const uint SWP_NOSIZE = 0x0001;
     public const uint SWP_NOMOVE = 0x0002;
     public const uint SWP_NOACTIVATE = 0x0010;

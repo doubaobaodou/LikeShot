@@ -89,14 +89,17 @@ public sealed class CaptureOverlay : Window
     {
         Title = "LikeShot 截图";
         Show();
-        Activate();
-        Focusable = true;
-        Keyboard.Focus(this);
         var hwnd = new WindowInteropHelper(this).Handle;
         // 只置顶，不加 WS_EX_TOOLWINDOW：ShowInTaskbar=false 已经够干净，
         // 而 TOOLWINDOW 会让截图层从窗口枚举里消失，自动化测试抓不到它。
         Win32.SetWindowPos(hwnd, Win32.HWND_TOPMOST, 0, 0, 0, 0,
             Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
+        // 置顶只保证盖得住，不保证键盘归我们：前台还留在原来那个窗口上时，
+        // Enter / Esc / Delete 全打在别人身上，看着就是「截了图但按什么都没反应」。
+        Win32.ForceForeground(hwnd);
+        Focusable = true;
+        Activate();
+        Keyboard.Focus(this);
     }
 
     public Point ToPhysical(Point dip) =>
