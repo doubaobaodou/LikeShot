@@ -81,6 +81,17 @@ public static class SelfTest
             session.PointerMove(new Point(ox + 230, oy + 60));
             session.PointerUp(new Point(ox + 230, oy + 60));
 
+            // 快照只留一份像素了：读单点、放大镜取块、打码底图三条路必须读到同一颗像素。
+            var snap = session.Snapshot;
+            int sx = ox + 160, sy = oy + 30;
+            var pxOne = snap.PixelAt(sx, sy);
+            var pxBlock = snap.SampleBlock(sx - 1, sy - 1, 3, 3);
+            var pxMid = Color.FromRgb(pxBlock[(1 * 3 + 1) * 4 + 2], pxBlock[(1 * 3 + 1) * 4 + 1], pxBlock[(1 * 3 + 1) * 4]);
+            var pxRegion = snap.CopyRegion(new Int32Rect(sx, sy, 1, 1));
+            log.AppendLine($"快照读像素三查：单点#{pxOne.R:X2}{pxOne.G:X2}{pxOne.B:X2} " +
+                           $"放大镜块中心#{pxMid.R:X2}{pxMid.G:X2}{pxMid.B:X2} 区域#{pxRegion[2]:X2}{pxRegion[1]:X2}{pxRegion[0]:X2} " +
+                           $"（三者必须一致，不一致就是唯一那份像素被读歪了）");
+
             session.SetTool(ToolKind.Marker);
             session.PointerDown(new Point(ox + 60, oy + 90), LeftOrRight.Left);
             session.PointerUp(new Point(ox + 60, oy + 90));
@@ -170,11 +181,9 @@ public static class SelfTest
 
             // 4) 退化选区不该成图。以前这里退回整张桌面快照，「只想取消这一下」会变成「导出一张全屏」。
             //    要验这条得用一个真的没框过选区的会话：Abort 只关窗口，旧会话的选区还挂着。
-            using (var blank = ScreenSnapshot.GrabVirtualDesktop())
-            {
-                var empty = new CaptureSession(blank, displays, 1.0);
-                log.AppendLine($"空选区成图：{(empty.RenderResult() == null ? "null（对）" : "非 null（错：会导出整张桌面）")}");
-            }
+            var blank = ScreenSnapshot.GrabVirtualDesktop();
+            var empty = new CaptureSession(blank, displays, 1.0);
+            log.AppendLine($"空选区成图：{(empty.RenderResult() == null ? "null（对）" : "非 null（错：会导出整张桌面）")}");
 
             // 5) 出图必须给结果：坏路径要还回那句原因，而不是把异常甩给全局兜底把会话崩掉。
             if (image != null)

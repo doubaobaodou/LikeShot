@@ -681,11 +681,14 @@ public sealed class CaptureOverlay : Window
             int originX = (int)cursor.X - cw / 2;
             int originY = (int)cursor.Y - ch / 2;
 
+            var block = session.Snapshot.SampleBlock(originX, originY, cw, ch);
             for (int gy = 0; gy < ch; gy++)
                 for (int gx = 0; gx < cw; gx++)
                 {
-                    var c = session.Snapshot.PixelAt(originX + gx, originY + gy);
-                    if (c.A == 0) c = Colors.Black;
+                    int i = (gy * cw + gx) * 4;
+                    var c = block[i + 3] == 0
+                        ? Colors.Black
+                        : Color.FromRgb(block[i + 2], block[i + 1], block[i]);
                     dc.DrawRectangle(new SolidColorBrush(c), null,
                         new Rect(x + gx * cell, y + 5 * scale + gy * cell, cell + 0.5, cell + 0.5));
                 }

@@ -61,11 +61,7 @@ public sealed class CaptureController
         var displays = allDisplays.Where(d =>
             d.Bounds.X < vb.Right() && vb.X < d.Bounds.Right() &&
             d.Bounds.Y < vb.Bottom() && vb.Y < d.Bounds.Bottom()).ToList();
-        if (displays.Count == 0)
-        {
-            snapshot.Dispose();
-            return;
-        }
+        if (displays.Count == 0) return;
 
         _replayMode = replay;
         double uiScale = displays.FirstOrDefault(d => d.IsPrimary)?.Scale ?? displays[0].Scale;
@@ -99,13 +95,12 @@ public sealed class CaptureController
 
         if (_session != null)
         {
-            _session.Snapshot.Dispose();
             _session = null;
         }
 
-        // 一次截图要往大对象堆上放两份整屏（字节数组 + 冻结图，各 25MB）。.NET 把它们收掉之后
-        // 并不主动把段还给系统，任务管理器里那个数字就一直挂着。收摊时压一次堆，
-        // 让下一次截图用同一块，而不是接着往上要。
+        // 整屏那份位图（3200×2000 就是 25MB）加上放大镜、打码底图那些一次性的整块缓冲，
+        // 都落在大对象堆上；.NET 收掉之后不主动把段还给系统，任务管理器里的数字就一直挂着。
+        // 收摊时压一次堆，让下一次截图用同一块，而不是接着往上要。
         GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
         GC.Collect();
     }

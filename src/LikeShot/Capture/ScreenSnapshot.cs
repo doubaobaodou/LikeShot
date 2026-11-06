@@ -8,22 +8,19 @@ namespace LikeShot.Capture;
 /// <summary>
 /// 按下热键那一刻的整屏冻结图。后续所有绘制、马赛克、导出都基于这份快照，
 /// 所以覆盖层不需要真透明，也就没有 WPF 透明窗的性能和 DPI 坑。
+/// 像素只留一份（位图自己那份）：3200×2000 一份就是 25MB，再配一个字节数组等于每次截图
+/// 都多占一块大对象堆。读像素改成按需拷，放大镜改成一次拷一整块。
 /// </summary>
-public sealed class ScreenSnapshot : IDisposable
+public sealed class ScreenSnapshot
 {
-    private byte[] _backing;
-
-    private ScreenSnapshot(WriteableBitmap image, byte[] backing, Int32Rect virtualBounds)
+    private ScreenSnapshot(WriteableBitmap image, Int32Rect virtualBounds)
     {
         Image = image;
-        _backing = backing;
         VirtualBounds = virtualBounds;
     }
 
     public WriteableBitmap Image { get; }
-    public byte[] Backing => _backing;
     public Int32Rect VirtualBounds { get; }
-    public int Stride => VirtualBounds.Width * 4;
 
     public static ScreenSnapshot GrabVirtualDesktop()
     {
@@ -40,23 +37,21 @@ public sealed class ScreenSnapshot : IDisposable
             g.ReleaseHdc(hdc);
         }
 
-        var backing = new byte[w * h * 4];
+        var image = new WriteableBitmap(w, h, 96, 96, PixelFormats.Bgra32, null);
         var data = bmp.LockBits(new System.Drawing.Rectangle(0, 0, w, h),
             System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
         try
         {
-            System.Runtime.InteropServices.Marshal.Copy(data.Scan0, backing, 0, backing.Length);
+            // 从 GDI 那块缓冲直接灌进位图，中间不过 byte[]。
+            image.WritePixels(new Int32Rect(0, 0, w, h), data.Scan0, w * h * 4, data.Stride);
         }
         finally
         {
             bmp.UnlockBits(data);
+            bmp.Dispose();
         }
 
-        var image = new WriteableBitmap(w, h, 96, 96, PixelFormats.Bgra32, null);
-        image.WritePixels(new Int32Rect(0, 0, w, h), backing, w * 4, 0);
-        bmp.Dispose();
-
-        return new ScreenSnapshot(image, backing, new Int32Rect(x, y, w, h));
+        return new ScreenSnapshot(image, new Int32Rect(x, y, w, h));
     }
 
     /// <summary>
@@ -67,14 +62,14 @@ public sealed class ScreenSnapshot : IDisposable
     {
         int w = source.PixelWidth, h = source.PixelHeight;
         int stride = w * 4;
-        byte[] backing = new byte[stride * h];
+        byte[] pixels = new byte[stride * h];
         var converted = new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
-        converted.CopyPixels(backing, stride, 0);
+        converted.CopyPixels(pixels, stride, 0);
 
         var image = new WriteableBitmap(w, h, 96, 96, PixelFormats.Bgra32, null);
-        image.WritePixels(new Int32Rect(0, 0, w, h), backing, stride, 0);
+        image.WritePixels(new Int32Rect(0, 0, w, h), pixels, stride, 0);
         image.Freeze();
-        return new ScreenSnapshot(image, backing, virtualBounds);
+        return new ScreenSnapshot(image, virtualBounds);
     }
 
     /// <summary>取一个物理像素（坐标是虚拟桌面物理坐标）。越界返回透明。</summary>
@@ -85,8 +80,40 @@ public sealed class ScreenSnapshot : IDisposable
         if (localX < 0 || localY < 0 || localX >= VirtualBounds.Width || localY >= VirtualBounds.Height)
             return Colors.Transparent;
 
-        int i = localY * Stride + localX * 4;
-        return Color.FromRgb(Backing[i + 2], Backing[i + 1], Backing[i]);
+        var px = new byte[4];
+        Image.CopyPixels(new Int32Rect(localX, localY, 1, 1), px, 4, 0);
+        return Color.FromRgb(px[2], px[1], px[0]);
+    }
+
+    /// <summary>拷一块物理区域出来（打码底图用）。区域要在快照范围内。</summary>
+    public byte[] CopyRegion(Int32Rect physical)
+    {
+        int w = Math.Max(1, physical.Width), h = Math.Max(1, physical.Height);
+        var buffer = new byte[w * 4 * h];
+        Image.CopyPixels(new Int32Rect(physical.X - VirtualBounds.X, physical.Y - VirtualBounds.Y, w, h),
+            buffer, w * 4, 0);
+        return buffer;
+    }
+
+    /// <summary>
+    /// 放大镜那种小块采样：整块一次拷出来，不是一格跨边界读一次。
+    /// 探出快照的那几格留成全透明，由画的人自己决定涂什么。
+    /// </summary>
+    public byte[] SampleBlock(int originX, int originY, int w, int h)
+    {
+        var buffer = new byte[w * h * 4];
+        var inside = Intersect(new Int32Rect(originX, originY, w, h));
+        if (inside.Width <= 0 || inside.Height <= 0) return buffer;
+
+        int pieceStride = inside.Width * 4;
+        var piece = new byte[pieceStride * inside.Height];
+        Image.CopyPixels(new Int32Rect(inside.X - VirtualBounds.X, inside.Y - VirtualBounds.Y,
+            inside.Width, inside.Height), piece, pieceStride, 0);
+
+        int rowOffset = (inside.Y - originY) * w * 4 + (inside.X - originX) * 4;
+        for (int y = 0; y < inside.Height; y++)
+            Buffer.BlockCopy(piece, y * pieceStride, buffer, rowOffset + y * w * 4, pieceStride);
+        return buffer;
     }
 
     public Int32Rect Intersect(Int32Rect rect)
@@ -131,7 +158,7 @@ public sealed class ScreenSnapshot : IDisposable
         var image = new WriteableBitmap(w, h, 96, 96, PixelFormats.Bgra32, null);
         image.WritePixels(new Int32Rect(0, 0, w, h), backing, stride, 0);
         image.Freeze();
-        return new ScreenSnapshot(image, backing, canvas);
+        return new ScreenSnapshot(image, canvas);
     }
 
     /// <summary>
@@ -147,21 +174,18 @@ public sealed class ScreenSnapshot : IDisposable
         Win32.BitBltFromScreen(hdc, physicalRect.X, physicalRect.Y, w, h);
         g.ReleaseHdc(hdc);
 
-        var backing = new byte[w * h * 4];
+        var image = new WriteableBitmap(w, h, 96, 96, PixelFormats.Bgra32, null);
         var data = bmp.LockBits(new System.Drawing.Rectangle(0, 0, w, h),
             System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-        try { System.Runtime.InteropServices.Marshal.Copy(data.Scan0, backing, 0, backing.Length); }
-        finally { bmp.UnlockBits(data); }
-        bmp.Dispose();
-
-        var image = new WriteableBitmap(w, h, 96, 96, PixelFormats.Bgra32, null);
-        image.WritePixels(new Int32Rect(0, 0, w, h), backing, w * 4, 0);
+        try
+        {
+            image.WritePixels(new Int32Rect(0, 0, w, h), data.Scan0, w * h * 4, data.Stride);
+        }
+        finally
+        {
+            bmp.UnlockBits(data);
+            bmp.Dispose();
+        }
         return image;
-    }
-
-    public void Dispose()
-    {
-        // 3200×2000 的冻结图是 25MB，退出截图层时要把这份大数组交还给 GC。
-        _backing = [];
     }
 }

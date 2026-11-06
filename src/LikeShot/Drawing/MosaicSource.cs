@@ -46,20 +46,7 @@ public sealed class MosaicSource
     /// 打码底图必须来自按下热键那一刻的冻结图。
     /// 如果去抓实时屏幕，抓到的会是盖在上面的截图层自己。
     /// </summary>
-    private byte[] GrabRegion()
-    {
-        int stride = _region.Width * 4;
-        var buffer = new byte[stride * _region.Height];
-        var src = _snapshot.Backing;
-        int srcStride = _snapshot.Stride;
-        int baseX = _region.X - _snapshot.VirtualBounds.X;
-        int baseY = _region.Y - _snapshot.VirtualBounds.Y;
-
-        for (int y = 0; y < _region.Height; y++)
-            Array.Copy(src, (baseY + y) * srcStride + baseX * 4, buffer, y * stride, stride);
-
-        return buffer;
-    }
+    private byte[] GrabRegion() => _snapshot.CopyRegion(_region);
 
     private static unsafe byte[] Pixelate(byte[] src, int w, int h, int block)
     {
