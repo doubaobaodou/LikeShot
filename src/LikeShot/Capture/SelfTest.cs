@@ -736,6 +736,155 @@ public static class SelfTest
     }
 
     /// <summary>
+    /// 版式取证：四个右键菜单各渲染一张。截图层、钉图窗、历史页卡片以前弹的是系统默认菜单，
+    /// 和托盘那套圆角卡片是两个时代的样式——「现在统一成一套了」这句话得看图算数。
+    /// </summary>
+    public static async void MenuShotRun(CaptureController controller, Action exit)
+    {
+        var log = new StringBuilder();
+        string dir = Path.Combine(Path.GetTempPath(), "likeshot-selftest");
+        Directory.CreateDirectory(dir);
+        string root = Path.Combine(dir, "menu-history");
+        LikeShot.UI.SettingsWindow? win = null;
+        var openedPins = new List<LikeShot.UI.PinWindow>();
+
+        try
+        {
+            var d = Display.All().First(x => x.IsPrimary);
+
+            // 1) 截图层
+            controller.BeginCapture();
+            var session = controller.SessionForTest;
+            if (session == null) throw new InvalidOperationException("截图会话没起来");
+            session.PointerDown(new Point(d.Bounds.X + 300, d.Bounds.Y + 260), LeftOrRight.Left);
+            session.PointerUp(new Point(d.Bounds.X + 300, d.Bounds.Y + 260));
+            session.PointerMove(new Point(d.Bounds.X + 800, d.Bounds.Y + 560));
+            session.PointerUp(new Point(d.Bounds.X + 800, d.Bounds.Y + 560));
+            await Task.Delay(400);
+            var overlay = controller.OverlaysForTest.First();
+            var capMenu = overlay.BuildContextMenu();
+            capMenu.PlacementTarget = overlay;
+            capMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.RelativePoint;
+            capMenu.HorizontalOffset = 300;
+            capMenu.VerticalOffset = 300;
+            log.AppendLine($"截图层菜单：{await RenderMenuToFile(capMenu, Path.Combine(dir, "menu-capture.png"))} 项={capMenu.Items.Count}");
+            capMenu.IsOpen = false;
+
+            // 1b) 截图层里的字框：以前右键弹的是系统那份灰菜单
+            overlay.OpenTextEditorForTest(new Point(d.Bounds.X + 420, d.Bounds.Y + 320));
+            if (overlay.TextEditorMenuForTest is not { } textMenu)
+                log.AppendLine("字框菜单：没拿到（不对）");
+            else
+            {
+                log.AppendLine($"字框菜单：{await RenderMenuToFile(textMenu, Path.Combine(dir, "menu-text.png"))} 项={textMenu.Items.Count}");
+                textMenu.IsOpen = false;
+            }
+            controller.Abort();
+
+            // 2) 钉图窗
+            var pin = new LikeShot.UI.PinWindow(
+                MakeTestImage(600, 400, Color.FromRgb(0x20, 0x50, 0xC0)),
+                new Int32Rect(d.Bounds.X + 200, d.Bounds.Y + 200, 600, 400), App.Config);
+            pin.ShowPinned();
+            openedPins.Add(pin);
+            await Task.Delay(300);
+            var pinMenu = pin.BuildContextMenu();
+            pinMenu.PlacementTarget = pin;
+            log.AppendLine($"钉图窗菜单：{await RenderMenuToFile(pinMenu, Path.Combine(dir, "menu-pin.png"))} 项={pinMenu.Items.Count}");
+            pinMenu.IsOpen = false;
+
+            // 3) 历史页卡片的右键菜单（库改道 Temp，不动真实历史）
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+            var store = HistoryStore.UseRootForTest(root);
+            for (int i = 0; i < 2; i++)
+            {
+                store.Add(TestTile(600, 400, i), HistoryStore.SourceCapture);
+                await Task.Delay(12);
+            }
+            win = new LikeShot.UI.SettingsWindow(App.Config);
+            win.Show();
+            win.SelectSection(LikeShot.UI.SettingsWindow.HistorySectionIndex);
+            await Task.Delay(400);
+            var cardMenu = win.CardMenuForTest(0);
+            if (cardMenu == null) log.AppendLine("历史页菜单：没拿到卡片的菜单（不对）");
+            else
+            {
+                log.AppendLine($"历史页菜单：{await RenderMenuToFile(cardMenu, Path.Combine(dir, "menu-history.png"))} 项={cardMenu.Items.Count}");
+                cardMenu.IsOpen = false;
+            }
+
+            // 3b) 设置页输入框：整段选中时，剪切/复制这两项该亮起来
+            win.SelectSection(0);
+            win.SaveDirForTest = @"D:\截图";
+            win.SelectSaveDirForTest();
+            await Task.Delay(200);
+            if (win.SaveDirMenuForTest is not { } fieldMenu) log.AppendLine("输入框菜单：没拿到（不对）");
+            else
+            {
+                log.AppendLine($"输入框菜单：{await RenderMenuToFile(fieldMenu, Path.Combine(dir, "menu-field.png"))} 项={fieldMenu.Items.Count}");
+                fieldMenu.IsOpen = false;
+            }
+
+            // 4) 托盘：样式就是照它对齐的，一起出图好比对
+            if (App.Current is App app && app.TrayForTest is { } tray)
+            {
+                tray.ShowMenuForTest();
+                var trayMenu = tray.MenuForTest;
+                log.AppendLine($"托盘菜单：{await RenderMenuToFile(trayMenu, Path.Combine(dir, "menu-tray.png"))} 项={trayMenu.Items.Count}");
+                trayMenu.IsOpen = false;
+            }
+            else log.AppendLine("托盘菜单：拿不到托盘（不对）");
+        }
+        catch (Exception ex)
+        {
+            log.AppendLine("FAILED: " + ex);
+        }
+        finally
+        {
+            foreach (var p in openedPins) p.Close();
+            win?.Close();
+        }
+
+        File.WriteAllText(Path.Combine(dir, "menu-report.txt"), log.ToString());
+        Console.Out.WriteLine(log);
+        exit();
+    }
+
+    /// <summary>
+    /// 把弹出来的菜单单独渲染成图：菜单有自己的顶层可视（PopupRoot），
+    /// 截屏抓不到它（无头进程没有前台权限），只能直接渲它的可视树。
+    /// </summary>
+    private static async Task<string> RenderMenuToFile(System.Windows.Controls.ContextMenu menu, string path)
+    {
+        menu.IsOpen = true;
+        // 菜单弹出带淡入动画，只泵消息不真等时间，拍下来是一张全透明的空壳。
+        await Task.Delay(220);
+        FlushIdle();
+        menu.UpdateLayout();
+        if (PresentationSource.FromVisual(menu)?.RootVisual is not FrameworkElement root ||
+            root.ActualWidth < 1 || root.ActualHeight < 1) return "没弹出可视根（不对）";
+        int w = (int)Math.Ceiling(root.ActualWidth), h = (int)Math.Ceiling(root.ActualHeight);
+        var rtb = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
+        rtb.Render(root);
+        int ink = OpaquePixels(rtb);
+        var enc = new PngBitmapEncoder();
+        enc.Frames.Add(BitmapFrame.Create(rtb));
+        using (var fs = File.Create(path)) enc.Save(fs);
+        // 只报尺寸会放过「弹出来了但什么都没画」，所以把实心像素数也写进回执。
+        return $"{w}x{h} 画到的像素={ink}{(ink < 500 ? "（几乎是空的，不对）" : "")}";
+    }
+
+    private static int OpaquePixels(RenderTargetBitmap rtb)
+    {
+        var buf = new byte[rtb.PixelWidth * rtb.PixelHeight * 4];
+        rtb.CopyPixels(buf, rtb.PixelWidth * 4, 0);
+        int ink = 0;
+        for (int i = 3; i < buf.Length; i += 4)
+            if (buf[i] > 200) ink++;
+        return ink;
+    }
+
+    /// <summary>
     /// 热键仲裁实跑：自己往系统注入一次 Ctrl+Alt+Shift+F9，看谁来接。
     /// 同一个键、同一个钩子，只改「让位名单」这一个变量：
     /// 名单里有 QQ 时必须放行，名单里换成不存在的进程时必须我们自己接管。

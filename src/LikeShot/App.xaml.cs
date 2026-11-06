@@ -19,6 +19,9 @@ public partial class App : Application
     /// <summary>设置页要驱动的截图动作（把历史图钉出去、丢回截图层）都走这个总控。</summary>
     internal CaptureController? Controller => _controller;
 
+    /// <summary>自检要打开托盘菜单看一眼样式，不给它这个口子就只能靠真点一下托盘。</summary>
+    internal TrayIcon? TrayForTest => _tray;
+
     /// <summary>自检要直接读仲裁器的判定，不给它开后门就只能靠日志猜。</summary>
     internal static HotkeyArbiter? Arbiter { get; private set; }
 
@@ -80,6 +83,8 @@ public partial class App : Application
             Dispatcher.BeginInvoke(() => SelfTest.StatusShotRun(_controller, () => Shutdown()));
         else if (e.Args.Contains("--selftest") && e.Args.Contains("--selectshot"))
             Dispatcher.BeginInvoke(() => SelfTest.SelectShotRun(_controller, () => Shutdown()));
+        else if (e.Args.Contains("--selftest") && e.Args.Contains("--menushot"))
+            Dispatcher.BeginInvoke(() => SelfTest.MenuShotRun(_controller, () => Shutdown()));
         else if (e.Args.Contains("--selftest") && e.Args.Contains("--settingsui"))
             Dispatcher.BeginInvoke(SelfTest.ShowSettings);
         else if (e.Args.Contains("--selftest") && e.Args.Contains("--hotkeytest"))
