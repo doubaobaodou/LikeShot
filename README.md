@@ -69,8 +69,8 @@ dotnet build
 dotnet run
 ```
 
-出发布包：`pack.cmd 0.1.6` 先出单文件 exe，再调 Inno Setup 编出 `setup.exe`，
-产物都落在 `dist\`。没装 Inno Setup 时照样出 exe，只是跳过安装器
+出发布包：`pack.cmd 0.1.6` 一条命令出上面那三个文件，全落在 `dist\`。
+没装 Inno Setup 时两个 zip 照样出，只是跳过安装器
 （装一次：`winget install JRSoftware.InnoSetup`）。安装脚本是 `installer\LikeShot.iss`，
 UTF-8 带 BOM，去掉 BOM 向导里的中文会变乱码。
 
