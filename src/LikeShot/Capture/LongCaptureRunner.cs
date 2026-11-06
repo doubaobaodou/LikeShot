@@ -101,7 +101,10 @@ public sealed class LongCaptureRunner : IDisposable
         {
             _autoScroll = false;
             _bar.SetAutoScroll(false);
-            _bar.SetStatus("已滚到底，点「完成」收尾");
+            // 一次都没长高过，那不是到底了，是这个页面没接住我们投的滚轮消息——两种情况得说得不一样。
+            _bar.SetStatus(_stitcher.Height > _region.Height
+                ? "已滚到底，点「完成」收尾"
+                : "这个页面没接住自动滚动：自己滚一下，它照样接着拼");
         }
 
         if (_stitcher.IsFull)
@@ -118,14 +121,41 @@ public sealed class LongCaptureRunner : IDisposable
 
     private void ScrollOnce()
     {
-        // 滚轮事件打在「光标所在位置」，而光标这时停在工具栏上，页面不会动。
-        // 所以先把光标挪到选区中心，再合成滚轮。
-        var restore = CaptureSession.CurrentPhysicalCursor();
-        Win32.SetCursorPos(_region.X + _region.Width / 2, _region.Y + _region.Height / 2);
         int notches = Math.Clamp(App.Config.LongCaptureScrollNotches, 1, 5);
         int delta = (_horizontal ? Win32.WHEEL_DELTA : -Win32.WHEEL_DELTA) * notches;
-        Win32.mouse_event(_horizontal ? Win32.MOUSEEVENTF_HWHEEL : Win32.MOUSEEVENTF_WHEEL, 0, 0, delta, UIntPtr.Zero);
-        Win32.SetCursorPos((int)restore.X, (int)restore.Y);
+        int cx = _region.X + _region.Width / 2, cy = _region.Y + _region.Height / 2;
+
+        // 把滚轮消息直接投给选区中心那个窗口，坐标写在 lParam 里，真光标在哪儿都不用管。
+        // 以前的写法是「搬光标到选区中心 → 合成滚轮 → 立刻搬回去」：系统真正处理这条
+        // 滚轮事件时光标已经被搬走了，实测自动滚动一帧都没推动（自检报告整片「整帧未变」）。
+        var target = Win32.WindowFromPoint(new Win32.POINT { X = cx, Y = cy });
+        if (target == nint.Zero)
+        {
+            LogOnce($"自动滚动找不到目标窗口：选区中心 {cx},{cy}");
+            return;
+        }
+        if (!_loggedTarget)
+        {
+            _loggedTarget = true;
+            var className = new System.Text.StringBuilder(64);
+            Win32.GetClassName(target, className, 64);
+            Win32.GetWindowThreadProcessId(target, out uint pid);
+            Log.Write($"自动滚动投给窗口 hwnd={target} 类名={className} 进程={pid} 消息=0x{(_horizontal ? Win32.WM_MOUSEHWHEEL : Win32.WM_MOUSEWHEEL):X}");
+        }
+        uint msg = _horizontal ? Win32.WM_MOUSEHWHEEL : Win32.WM_MOUSEWHEEL;
+        if (!Win32.PostMessage(target, msg, Win32.WheelWParam(delta), Win32.ScreenPointLParam(cx, cy)))
+            LogOnce("自动滚动投递滚轮消息失败");
+    }
+
+    private bool _loggedTarget;
+
+    private string _lastScrollLog = "";
+
+    private void LogOnce(string message)
+    {
+        if (_lastScrollLog == message) return;
+        _lastScrollLog = message;
+        Log.Write(message);
     }
 
     public BitmapSource? BuildResult()
@@ -220,7 +250,6 @@ internal sealed class LongFrameWindow : Window
         AllowsTransparency = true;
         Background = Brushes.Transparent;
 
-        var vb = new Rect();
         int minX = displays.Min(d => d.Bounds.X), minY = displays.Min(d => d.Bounds.Y);
         int maxX = displays.Max(d => d.Bounds.X + d.Bounds.Width);
         int maxY = displays.Max(d => d.Bounds.Y + d.Bounds.Height);

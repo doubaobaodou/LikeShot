@@ -106,14 +106,14 @@ public sealed class LongStitcher
         int appended = AppendRows(frame, frameStride, Math.Max(0, _height - _offset), frameHeight - _footer);
 
         _previous = hashes;
-        Note(step, votes, top, bottom, appended);
+        Note(step, votes, present, top, bottom, appended);
         return appended;
     }
 
-    private void Note(int step, int votes, int top, int bottom, int appended)
+    private void Note(int step, int votes, int present, int top, int bottom, int appended)
     {
         if (_diag.Length > 60000) return;
-        _diag.AppendLine($"带=[{top},{bottom}) 步进={step} 落点={_offset} 票={votes} 追加={appended} 底栏={_footer} 画布={_height}");
+        _diag.AppendLine($"带=[{top},{bottom}) 步进={step} 落点={_offset} 票={votes} 认出行数={present} 追加={appended} 底栏={_footer} 画布={_height}");
     }
 
     /// <summary>和上一帧相比，首尾各有多少行一动不动。</summary>

@@ -183,6 +183,21 @@ internal static class Win32
     [DllImport("user32.dll")]
     public static extern void mouse_event(uint dwFlags, uint dx, uint dy, int data, UIntPtr extraInfo);
 
+    [DllImport("user32.dll")]
+    public static extern nint WindowFromPoint(POINT point);
+
+    [DllImport("user32.dll")]
+    public static extern bool PostMessage(nint hWnd, uint msg, nint wParam, nint lParam);
+
+    /// <summary>滚轮消息：wParam 的高位 WORD 是有符号的格数，lParam 是屏幕坐标。</summary>
+    public const uint WM_MOUSEWHEEL = 0x020A;
+    public const uint WM_MOUSEHWHEEL = 0x020E;
+
+    /// <summary>把 WM_MOUSEWHEEL 的 wParam 拼成 MAKEWPARAM(0, delta)：delta 按 SHORT 进高位。</summary>
+    public static nint WheelWParam(int delta) => new(((long)(uint)(ushort)(short)delta) << 16);
+
+    public static nint ScreenPointLParam(int x, int y) => new(((y & 0xffffL) << 16) | (x & 0xffffL));
+
     public const uint MOUSEEVENTF_WHEEL = 0x0800;
     public const uint MOUSEEVENTF_HWHEEL = 0x1000;
     public const int WHEEL_DELTA = 120;
