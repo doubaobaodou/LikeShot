@@ -49,24 +49,19 @@ public sealed class TrayIcon : IDisposable
             if (e.Button == WF.MouseButtons.Right) ShowMenu();
         };
 
-        _captureItem = MakeItem("camera", accentIcon: true);
+        _captureItem = MenuCard.Item("camera", "截图", accentIcon: true);
         _captureItem.Click += (_, _) => BeginCapture();
 
-        var settings = MakeItem("gear");
-        settings.Header = "设置…";
-        settings.Click += (_, _) => Application.Current.Dispatcher.Invoke(() => App.OpenSettings());
+        var settings = MenuCard.Item("gear", "设置…",
+            () => Application.Current.Dispatcher.Invoke(() => App.OpenSettings()));
 
-        var history = MakeItem("history");
-        history.Header = "历史截图…";
-        history.Click += (_, _) => Application.Current.Dispatcher.Invoke(
-            () => App.OpenSettings(SettingsWindow.HistorySectionIndex));
+        var history = MenuCard.Item("history", "历史截图…",
+            () => Application.Current.Dispatcher.Invoke(
+                () => App.OpenSettings(SettingsWindow.HistorySectionIndex)));
 
-        var folder = MakeItem("folder");
-        folder.Header = "打开保存目录";
-        folder.Click += (_, _) => OpenFolder();
+        var folder = MenuCard.Item("folder", "打开保存目录", OpenFolder);
 
-        _autostartItem = MakeItem("power", checkable: true);
-        _autostartItem.Header = "开机自动启动";
+        _autostartItem = MenuCard.Item("power", "开机自动启动", checkable: true);
         _autostartItem.Click += (_, _) =>
         {
             bool on = _autostartItem.IsChecked;
@@ -76,28 +71,24 @@ public sealed class TrayIcon : IDisposable
             if (error != null) NotifyProblem("开机自启没存下来", error);
         };
 
-        _statusItem = new MenuItem { IsEnabled = false, Style = ItemStyle() };
+        _statusItem = MenuCard.StatusItem("");
 
-        var exit = MakeItem("exit", redIcon: true);
-        exit.Header = "退出 LikeShot";
-        exit.Click += (_, _) => Application.Current.Dispatcher.Invoke(() => Application.Current.Shutdown());
+        var exit = MenuCard.Item("exit", "退出 LikeShot",
+            () => Application.Current.Dispatcher.Invoke(() => Application.Current.Shutdown()),
+            red: true);
 
-        _menu = new ContextMenu
-        {
-            Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint,
-            HorizontalOffset = -14,
-            VerticalOffset = -14,
-            FontFamily = new FontFamily("Microsoft YaHei UI, Microsoft YaHei, Segoe UI"),
-            FontSize = 13,
-            Style = MenuStyle()
-        };
+        _menu = MenuCard.New();
+        _menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+        // 卡片四周留了 14px 透明边距给投影，不往回挪一点，鼠标会落在投影空白上。
+        _menu.HorizontalOffset = -14;
+        _menu.VerticalOffset = -14;
         _menu.Items.Add(_captureItem);
-        _menu.Items.Add(Sep());
+        _menu.Items.Add(MenuCard.Sep());
         _menu.Items.Add(settings);
         _menu.Items.Add(history);
         _menu.Items.Add(folder);
         _menu.Items.Add(_autostartItem);
-        _menu.Items.Add(Sep());
+        _menu.Items.Add(MenuCard.Sep());
         _menu.Items.Add(_statusItem);
         _menu.Items.Add(exit);
 
@@ -134,149 +125,6 @@ public sealed class TrayIcon : IDisposable
         _captureItem.InputGestureText = _config.CaptureChord;
         _statusItem.Header = _statusProvider();
         _autostartItem.IsChecked = AutoStart.IsEnabled();
-    }
-
-    // ---------- 样式 ----------
-    // 模板里有 Grid 列定义和 TargetName 触发器，工厂树拼不动，按 SliderStyle 的办法
-    // 用 XAML 生成、色值插进去。
-
-    private Style MenuStyle()
-    {
-        const string xaml = """
-            <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                   TargetType="ContextMenu">
-                <Setter Property="Template">
-                    <Setter.Value>
-                        <ControlTemplate TargetType="ContextMenu">
-                            <Grid Margin="14">
-                                <!-- 四周留 14px 给投影，整个弹出窗是透明的，阴影落得下去 -->
-                                <Border CornerRadius="9" Background="White">
-                                    <Border.Effect>
-                                        <DropShadowEffect BlurRadius="16" ShadowDepth="3" Direction="270" Opacity="0.26"/>
-                                    </Border.Effect>
-                                </Border>
-                                <Border Background="{BG}" BorderBrush="{BORDER}" BorderThickness="1"
-                                        CornerRadius="8" Padding="5">
-                                    <StackPanel IsItemsHost="True"/>
-                                </Border>
-                            </Grid>
-                        </ControlTemplate>
-                    </Setter.Value>
-                </Setter>
-            </Style>
-            """;
-        return (Style)System.Windows.Markup.XamlReader.Parse(xaml
-            .Replace("{BG}", "#FFF9F9F9")
-            .Replace("{BORDER}", "#FFE3E3E3"));
-    }
-
-    private static Separator Sep() => new()
-    {
-        Margin = new Thickness(6, 4, 6, 4),
-        Style = SepStyle()
-    };
-
-    private static Style SepStyle()
-    {
-        const string xaml = """
-            <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                   TargetType="Separator">
-                <Setter Property="Template">
-                    <Setter.Value>
-                        <ControlTemplate TargetType="Separator">
-                            <Border Height="1" Background="#FFE7E7E7" CornerRadius="0.5"/>
-                        </ControlTemplate>
-                    </Setter.Value>
-                </Setter>
-                <Setter Property="IsHitTestVisible" Value="False"/>
-            </Style>
-            """;
-        return (Style)System.Windows.Markup.XamlReader.Parse(xaml);
-    }
-
-    private MenuItem MakeItem(string iconKey, bool accentIcon = false, bool redIcon = false, bool checkable = false)
-    {
-        var item = new MenuItem
-        {
-            Header = "",   // 标题由调用处给，键位这类会变的内容展开时再刷
-            Icon = TrayGlyph(iconKey, accentIcon ? Theme.Accent : redIcon ? Theme.DangerRed : Color.FromRgb(0x4A, 0x4A, 0x4A)),
-            Margin = new Thickness(1, 0, 1, 0),
-            Style = ItemStyle()
-        };
-        if (checkable) item.IsCheckable = true;
-        return item;
-    }
-
-    /// <summary>菜单项模板：左图标、中标题、右侧选中勾（或快捷键），悬停圆角灰块。</summary>
-    private static Style ItemStyle()
-    {
-        const string xaml = """
-            <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                   TargetType="MenuItem">
-                <Setter Property="Template">
-                    <Setter.Value>
-                        <ControlTemplate TargetType="MenuItem">
-                            <Border x:Name="hover" Height="34" CornerRadius="5" Background="Transparent">
-                                <Grid Margin="10,0,10,0">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="27"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <ContentPresenter Grid.Column="0" ContentSource="Icon" VerticalAlignment="Center" Width="17"/>
-                                    <ContentPresenter x:Name="header" Grid.Column="1" ContentSource="Header"
-                                                      VerticalAlignment="Center"
-                                                      TextBlock.Foreground="#FF1B1B1B" TextBlock.FontSize="13"/>
-                                    <TextBlock x:Name="gesture" Grid.Column="2" Text="{TemplateBinding InputGestureText}"
-                                               VerticalAlignment="Center" Foreground="#FF8C8C8C" FontSize="12" Margin="18,0,2,0"/>
-                                    <TextBlock x:Name="check" Grid.Column="2" Text="&#xE73E;"
-                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13"
-                                               VerticalAlignment="Center" Margin="18,0,2,0" Foreground="{CHECK}"
-                                               Visibility="Collapsed"/>
-                                </Grid>
-                            </Border>
-                            <ControlTemplate.Triggers>
-                                <MultiTrigger>
-                                    <MultiTrigger.Conditions>
-                                        <Condition Property="IsMouseOver" Value="True"/>
-                                        <Condition Property="IsEnabled" Value="True"/>
-                                    </MultiTrigger.Conditions>
-                                    <Setter TargetName="hover" Property="Background" Value="#FFEBEBEB"/>
-                                </MultiTrigger>
-                                <Trigger Property="IsEnabled" Value="False">
-                                    <Setter TargetName="header" Property="TextBlock.Foreground" Value="#FF9E9E9E"/>
-                                </Trigger>
-                                <Trigger Property="IsChecked" Value="True">
-                                    <Setter TargetName="check" Property="Visibility" Value="Visible"/>
-                                </Trigger>
-                            </ControlTemplate.Triggers>
-                        </ControlTemplate>
-                    </Setter.Value>
-                </Setter>
-            </Style>
-            """;
-        return (Style)System.Windows.Markup.XamlReader.Parse(xaml.Replace("{CHECK}", "#FF318AFF"));
-    }
-
-    /// <summary>托盘菜单的 17px 描边小图标，和工具栏同一套 Lucide 路径。</summary>
-    private static FrameworkElement TrayGlyph(string iconKey, Color color)
-    {
-        var brush = Theme.Brush(color);
-        var canvas = new Canvas { Width = 17, Height = 17 };
-        if (Icons.StrokePaths.TryGetValue(iconKey, out var data))
-            canvas.Children.Add(new System.Windows.Shapes.Path
-            {
-                Data = Icons.Parse(data),
-                Stroke = brush,
-                StrokeThickness = 1.6,
-                StrokeLineJoin = PenLineJoin.Round,
-                StrokeStartLineCap = PenLineCap.Round,
-                StrokeEndLineCap = PenLineCap.Round
-            });
-        return canvas;
     }
 
     // ---------- 行为 ----------

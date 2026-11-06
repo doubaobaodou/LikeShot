@@ -342,29 +342,31 @@ public sealed class CaptureOverlay : Window
 
     private void ShowContextMenu(Point physical)
     {
-        var menu = new ContextMenu();
-
-        MenuItem Item(string text, Action action, string gesture)
-        {
-            var mi = new MenuItem { Header = text, InputGestureText = gesture };
-            mi.Click += (_, _) => action();
-            return mi;
-        }
-
-        menu.Items.Add(Item("完成截图", () => _session.Finish(CopyMode.Clipboard), "双击 / Enter"));
-        menu.Items.Add(Item("保存", () => _session.Finish(CopyMode.File), "Ctrl+S"));
-        menu.Items.Add(Item("钉在桌面上", () => _session.Finish(CopyMode.Pin), ""));
-        menu.Items.Add(new Separator());
-        menu.Items.Add(Item("重新选择截图区域", () => _session.ResetSelection(), ""));
-        menu.Items.Add(Item("撤销编辑", () => _session.Undo(), "Ctrl+Z"));
-        menu.Items.Add(new Separator());
-        menu.Items.Add(Item("退出截图", () => _session.Exit(), "Esc"));
-
+        var menu = BuildContextMenu();
         menu.PlacementTarget = this;
         menu.Placement = PlacementMode.RelativePoint;
         menu.HorizontalOffset = (physical.X - _display.Bounds.X) / _display.Scale;
         menu.VerticalOffset = (physical.Y - _display.Bounds.Y) / _display.Scale;
         menu.IsOpen = true;
+    }
+
+    /// <summary>
+    /// 截图层的右键菜单。和托盘同一个 MenuCard 样式——以前这里是系统默认菜单，
+    /// 白底直角没图标，和工具栏、托盘摆在一起像两个程序。自检也直接开这一份，
+    /// 保证看版式时走的不是另一套代码。
+    /// </summary>
+    internal ContextMenu BuildContextMenu()
+    {
+        var menu = MenuCard.New();
+        menu.Items.Add(MenuCard.Item("finish", "完成截图", () => _session.Finish(CopyMode.Clipboard), "双击 / Enter"));
+        menu.Items.Add(MenuCard.Item("save", "保存", () => _session.Finish(CopyMode.File), "Ctrl+S"));
+        menu.Items.Add(MenuCard.Item("nail", "钉在桌面上", () => _session.Finish(CopyMode.Pin)));
+        menu.Items.Add(MenuCard.Sep());
+        menu.Items.Add(MenuCard.Item("camera", "重新选择截图区域", () => _session.ResetSelection()));
+        menu.Items.Add(MenuCard.Item("undo", "撤销编辑", () => _session.Undo(), "Ctrl+Z"));
+        menu.Items.Add(MenuCard.Sep());
+        menu.Items.Add(MenuCard.Item("exit", "退出截图", () => _session.Exit(), "Esc", red: true));
+        return menu;
     }
 
     private void OnKeyDownLocal(object sender, KeyEventArgs e)

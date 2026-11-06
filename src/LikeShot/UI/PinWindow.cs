@@ -258,26 +258,26 @@ public sealed class PinWindow : Window
 
     private void OnRightUp(object sender, MouseButtonEventArgs e)
     {
-        var menu = new ContextMenu();
-        MenuItem Item(string text, Action action)
-        {
-            var mi = new MenuItem { Header = text };
-            mi.Click += (_, _) => action();
-            return mi;
-        }
-
-        menu.Items.Add(Item("完成（复制到剪贴板）", FinishToClipboard));
-        menu.Items.Add(Item("保存", SaveToDisk));
-        menu.Items.Add(new Separator());
-        menu.Items.Add(Item("恢复原始大小", () => ZoomTo(1.0)));
-        menu.Items.Add(Item("放大", () => ZoomBy(1.25, new Point(0, 0))));
-        menu.Items.Add(Item("缩小", () => ZoomBy(0.8, new Point(0, 0))));
-        menu.Items.Add(new Separator());
-        menu.Items.Add(Item("关闭", Close));
+        var menu = BuildContextMenu();
         menu.PlacementTarget = this;
         menu.Placement = PlacementMode.MousePoint;
         menu.IsOpen = true;
         e.Handled = true;
+    }
+
+    /// <summary>钉图窗的右键菜单：和托盘、截图层同一套 MenuCard 样式，图标和卡片按钮对齐。</summary>
+    internal ContextMenu BuildContextMenu()
+    {
+        var menu = MenuCard.New();
+        menu.Items.Add(MenuCard.Item("copy", "完成（复制到剪贴板）", FinishToClipboard));
+        menu.Items.Add(MenuCard.Item("save", "保存", SaveToDisk));
+        menu.Items.Add(MenuCard.Sep());
+        menu.Items.Add(MenuCard.Item("fit", "恢复原始大小", () => ZoomTo(1.0)));
+        menu.Items.Add(MenuCard.Item("zoom-in", "放大", () => ZoomBy(1.25, new Point(0, 0))));
+        menu.Items.Add(MenuCard.Item("zoom-out", "缩小", () => ZoomBy(0.8, new Point(0, 0))));
+        menu.Items.Add(MenuCard.Sep());
+        menu.Items.Add(MenuCard.Item("exit", "关闭", Close, red: true));
+        return menu;
     }
 
     // ---------- 尺寸 ----------

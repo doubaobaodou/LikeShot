@@ -388,25 +388,21 @@ public sealed partial class SettingsWindow
 
     private ContextMenu HistoryMenu(HistoryEntry e, string path)
     {
-        var menu = new ContextMenu();
-        void Add(string text, Action action)
-        {
-            var item = new MenuItem { Header = text };
-            item.Click += (_, _) => action();
-            menu.Items.Add(item);
-        }
-        Add("打开所在文件夹", () =>
+        // 卡片上那排按钮用的同一套图标，右键菜单也走 MenuCard，样式和托盘对齐。
+        var menu = MenuCard.New();
+        menu.Items.Add(MenuCard.Item("folder", "打开所在文件夹", () =>
         {
             var error = FolderActions.Reveal(path);
             if (error != null) _status.Text = $"打不开：{error}";
-        });
-        Add("复制文件路径", () =>
+        }));
+        menu.Items.Add(MenuCard.Item("copy", "复制文件路径", () =>
         {
             var error = Exporter.TrySetText(path);
             _status.Text = error == null ? "路径已复制到剪贴板" : $"路径没复制上：{error}";
-        });
-        menu.Items.Add(new Separator());
-        Add(e.Favorite ? "取消收藏" : "收藏这张", () => ToggleFavorite(e));
+        }));
+        menu.Items.Add(MenuCard.Sep());
+        menu.Items.Add(MenuCard.Item(e.Favorite ? "star-fill" : "star",
+            e.Favorite ? "取消收藏" : "收藏这张", () => ToggleFavorite(e)));
         return menu;
     }
 
@@ -597,6 +593,12 @@ public sealed partial class SettingsWindow
     }
 
     internal void HistoryPickForTest(int index, bool toggle) => PickCard(_historyShown[index], toggle);
+
+    /// <summary>自检用：把某张卡片真实的右键菜单取出来（不另建一份，免得测的和用的不是同一个）。</summary>
+    internal ContextMenu? CardMenuForTest(int index) =>
+        index < _historyShown.Count && _historyCards.TryGetValue(_historyShown[index].Id, out var card)
+            ? card.ContextMenu
+            : null;
 
     /// <summary>按名字点卡片底部那个动作，返回界面当时说的那句回执。</summary>
     internal string HistoryDoForTest(string action, int index)
