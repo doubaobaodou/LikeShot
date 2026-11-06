@@ -44,7 +44,9 @@ public sealed partial class SettingsWindow
 
     private UIElement BuildHistoryPage()
     {
-        HistoryStore.Shared.Changed += () => Dispatcher.BeginInvoke(RefreshHistory);
+        // 命名处理器：窗口关掉时要退订，否则关掉的窗连同整页图库一起留在托管堆里。
+        HistoryStore.Shared.Changed += OnHistoryStoreChanged;
+        Closed += (_, _) => HistoryStore.Shared.Changed -= OnHistoryStoreChanged;
         PreviewKeyDown += OnHistoryKeyDown;
         _historySource.Select("全部");
 
@@ -215,6 +217,8 @@ public sealed partial class SettingsWindow
     }
 
     // ---------- 列表 ----------
+
+    private void OnHistoryStoreChanged() => Dispatcher.BeginInvoke(RefreshHistory);
 
     private void RefreshHistory()
     {

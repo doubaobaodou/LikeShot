@@ -15,6 +15,8 @@ internal static class Win32
     public const uint MOD_WIN = 0x0008;
     public const uint MOD_NOREPEAT = 0x4000;
 
+    public const uint WM_HOTKEY = 0x0312;
+
     public const int ERROR_HOTKEY_ALREADY_REGISTERED = 1409;
 
     public const int WH_KEYBOARD_LL = 13;
@@ -182,6 +184,12 @@ internal static class Win32
 
     [DllImport("kernel32.dll")]
     public static extern uint GetCurrentThreadId();
+
+    [DllImport("kernel32.dll")]
+    public static extern bool SetProcessWorkingSetSize(nint hProcess, nint min, nint max);
+
+    [DllImport("kernel32.dll")]
+    public static extern nint GetCurrentProcess();
 
     /// <summary>
     /// 顶到最前并且真的把键盘焦点抢过来。系统有个「前台锁」：不是最后一个收到输入的进程，

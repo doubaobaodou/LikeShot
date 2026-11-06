@@ -39,6 +39,13 @@ public sealed class MosaicSource
         bmp.WritePixels(new Int32Rect(0, 0, w, h), dst, w * 4, 0);
         bmp.Freeze();
         _cache[key] = bmp;
+        // 拖强度滑条每格都会进一张（全尺寸选区就是 25MB），只留最近两档，
+        // 别让一次拖动攒出几百 MB。
+        while (_cache.Count > 2)
+        {
+            var oldest = _cache.Keys.First(k => !k.Equals(key));
+            _cache.Remove(oldest);
+        }
         return bmp;
     }
 

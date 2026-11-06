@@ -10,7 +10,10 @@ namespace LikeShot.Hotkeys;
 /// 2. 让位进程在跑、但连着按两次它一次都没弹窗 → 判定它把这个键关掉了，之后由我们接管；
 /// 3. 让位进程都不在跑 → 先试探这个键有没有人注册：没人注册才由我们接管，
 ///    被别的程序占了就继续放行，避免把别人的热键抢过来变成「按了没反应」。
-/// 全程不长期持有 RegisterHotKey，所以 QQ 登录时永远能注册成功，不会弹「热键被占用」。
+/// 判定归我们所有的期间会真的挂上 RegisterHotKey（不再只靠低级键盘钩子）：
+/// 任务管理器这类提权窗口在前台时，UIPI 会把按键对低权限进程的 LL 钩子整个藏掉，
+/// 钩子收不到就永远接管不了；注册热键由系统在输入层分发，不受前台提权影响。
+/// 让位进程一出现立刻卸载（500ms 内），QQ 启动后注册自己的热键不会撞上我们。
 /// </summary>
 internal sealed class HotkeyArbiter : IDisposable
 {
@@ -22,6 +25,11 @@ internal sealed class HotkeyArbiter : IDisposable
     private volatile bool _yieldAlive;
     private volatile bool _keyIsFree = true;
     private bool _trackedDown;
+
+    /// <summary>归我们所有的状态下挂着的全局热键。挂上后按键走 WM_HOTKEY，钩子不再自己吞。</summary>
+    private bool _hotkeyHeld;
+    private Chord? _heldChord;   // 挂着的注册对应的键位：键位换了必须重挂，不然按新键没人应
+    private const int HotkeyId = 0xC0FF;
 
     /// <summary>让位进程是不是真的在接这个键。判错了也能自己纠回来，见 ObserveYieldReply。</summary>
     private volatile bool _yieldHandles = true;
@@ -86,6 +94,8 @@ internal sealed class HotkeyArbiter : IDisposable
         _hook?.Dispose();
         _hook = new KeyboardHook(Filter);
         _hook.Install();
+        // WM_HOTKEY 投到线程队列，WPF 的消息泵把它交给 ComponentDispatcher 这一层。
+        System.Windows.Interop.ComponentDispatcher.ThreadPreprocessMessage += OnThreadMessage;
         RefreshOwnership();
         _timer.Start();
     }
@@ -131,6 +141,14 @@ internal sealed class HotkeyArbiter : IDisposable
         if (_yieldAlive && !_keyIsFree)
         {
             LogFromHook($"热键 {ChordText()} 放行：已被其它程序注册");
+            return false;
+        }
+
+        if (_hotkeyHeld)
+        {
+            // 全局热键已经替我们盯着这个键（挂了注册的状态）：钩子不许再吞，
+            // 否则系统收不到这个键，WM_HOTKEY 就不会来。钩子看不见提权窗口前的按键，
+            // 看得见的时候放它过去正好走注册热键那条路，一次按键只触发一回。
             return false;
         }
 
@@ -194,7 +212,14 @@ internal sealed class HotkeyArbiter : IDisposable
             // 它还在接的时候绝不试探：那一次极短的注册有可能正好卡在它注册之前，把它挤掉。
             // 只有已经判过「它不接这个键」才敢探一下——探出来被别人占了照样放行，
             // 这一条也顺带兜住了「他中途把 QQ 的截图热键打开」那种情况。
-            _keyIsFree = _yieldHandles ? false : ChordProbe.IsFree(_chord);
+            if (_yieldHandles)
+            {
+                _keyIsFree = false;
+                SetHotkeyHeld(false);   // 让位进程出现了，先把我们的注册卸掉，别挡它注册
+                return;
+            }
+            _keyIsFree = ProbeFree();
+            SetHotkeyHeld(_keyIsFree);
             return;
         }
 
@@ -208,7 +233,60 @@ internal sealed class HotkeyArbiter : IDisposable
             _yieldHandles = true;
             _strikes = 0;
         }
-        _keyIsFree = ChordProbe.IsFree(_chord);
+        if (_hotkeyHeld && _heldChord == _chord)
+        {
+            // 没人跟我们要这个键、键位也没换过：挂着的注册保持不动。
+            // 每 500ms 卸了再挂既留出按键正好落进空窗的缝，日志也会被刷满。
+            _keyIsFree = true;
+            return;
+        }
+        _keyIsFree = ProbeFree();
+        SetHotkeyHeld(_keyIsFree);
+    }
+
+    /// <summary>探一下这个键是否没人注册。自己挂着注册的话先卸下来，否则探出来永远是「被占用」。</summary>
+    private bool ProbeFree()
+    {
+        SetHotkeyHeld(false);
+        return ChordProbe.IsFree(_chord);
+    }
+
+    /// <summary>
+    /// 挂上 / 卸下真的全局热键。挂上之后按键由系统直接投 WM_HOTKEY 到线程队列，
+    /// 不经过前台窗口——这就是任务管理器（提权）在前台时我们也能收到热键的原因。
+    /// </summary>
+    private bool _lastLoggedHeld;
+
+    private void SetHotkeyHeld(bool hold)
+    {
+        if (hold == _hotkeyHeld) return;
+        if (hold)
+        {
+            _hotkeyHeld = Win32.RegisterHotKey(nint.Zero, HotkeyId,
+                _chord.Modifiers | Win32.MOD_NOREPEAT, _chord.Vk);
+            if (_hotkeyHeld) _heldChord = _chord;
+        }
+        else
+        {
+            Win32.UnregisterHotKey(nint.Zero, HotkeyId);
+            _hotkeyHeld = false;
+            _heldChord = null;
+        }
+        if (_hotkeyHeld != _lastLoggedHeld)
+        {
+            Log.Write(_hotkeyHeld
+                ? $"已挂上全局热键 {ChordText()}（提权窗口前台也能收到）"
+                : $"已卸下全局热键 {_heldChord?.Text ?? ChordText()}");
+            _lastLoggedHeld = _hotkeyHeld;
+        }
+    }
+
+    /// <summary>线程队列里的 WM_HOTKEY：挂了注册的状态下，这就是我们的截图键。</summary>
+    private void OnThreadMessage(ref System.Windows.Interop.MSG msg, ref bool handled)
+    {
+        if (msg.message != Win32.WM_HOTKEY || msg.wParam.ToInt64() != HotkeyId) return;
+        handled = true;
+        Trigger();
     }
 
     /// <summary>
@@ -298,6 +376,8 @@ internal sealed class HotkeyArbiter : IDisposable
         _watchdog?.Stop();
         _observer?.Dispose();
         _observer = null;
+        SetHotkeyHeld(false);
+        System.Windows.Interop.ComponentDispatcher.ThreadPreprocessMessage -= OnThreadMessage;
         _hook?.Dispose();
         _hook = null;
     }

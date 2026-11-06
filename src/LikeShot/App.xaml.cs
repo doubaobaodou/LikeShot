@@ -73,6 +73,11 @@ public partial class App : Application
         _arbiter.Start();
         Arbiter = _arbiter;
 
+        // 托盘常驻的轻量软件，闲置时把工作集还给系统（截图收摊时也会还一次）。
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, () =>
+            LikeShot.Native.Win32.SetProcessWorkingSetSize(
+                LikeShot.Native.Win32.GetCurrentProcess(), -1, -1));
+
         if (e.Args.Contains("--capture"))
             Dispatcher.BeginInvoke(() => _controller.BeginCapture());
         else if (e.Args.Contains("--selftest") && e.Args.Contains("--settingstest"))

@@ -103,6 +103,10 @@ public sealed class CaptureController
         // 收摊时压一次堆，让下一次截图用同一块，而不是接着往上要。
         GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
         GC.Collect();
+        // GC 收完只是「可用」，任务管理器里的数字要等系统自己来要页面才掉。
+        // 轻量常驻软件的惯例：收摊时主动把工作集还回去，下次用哪页再进哪页。
+        LikeShot.Native.Win32.SetProcessWorkingSetSize(
+            LikeShot.Native.Win32.GetCurrentProcess(), -1, -1);
     }
 
     private void OnFinish(FinishRequest request)
