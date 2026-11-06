@@ -124,7 +124,18 @@ public sealed class PinWindow : Window
         MouseLeave += (_, _) => { _hovering = false; ShowToolbar(false); };
         KeyDown += (_, e) =>
         {
-            if (e.Key == Key.Escape) Close();
+            // 输入框开着时键盘归打字的人：Ctrl+C 是复制选中的字，不是把这张钉图收工；
+            // Ctrl+Z 是撤销打字，不能顺手把一条标注也撤掉。漏了这层守卫，
+            // 在字框里按 Ctrl+C 会把整张钉图复制关闭。
+            if (_pinEditor != null) return;
+            if (e.Key == Key.Escape)
+            {
+                // 和截图层同一套三层退出（README 也是这么写的）：先取消选中，再收画具，最后关窗。
+                if (_session.Selected != null) _session.Select(null);
+                else if (_session.Tool != ToolKind.None) _session.SetTool(ToolKind.None);
+                else Close();
+            }
+            else if (e.Key is Key.Delete or Key.Back) _session.DeleteSelected();
             else if (e.Key == Key.Enter) FinishToClipboard();
             else if (e.Key == Key.C && Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) FinishToClipboard();
             else if (e.Key == Key.S && Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) SaveToDisk();

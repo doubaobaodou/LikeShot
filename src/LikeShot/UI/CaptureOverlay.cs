@@ -374,8 +374,10 @@ public sealed class CaptureOverlay : Window
 
     private void OnKeyDownLocal(object sender, KeyEventArgs e)
     {
-        // 输入框开着的时候键盘归打字的人：这时候 Delete/Backspace 是删字，不是删标注。
-        if (_textEditor != null) return;
+        // 键盘在任何一个输入框手里时都归打字的人：不只是文字编辑框，
+        // 取色器的 RGB 输入框里按 Backspace 是删数字——不能让它变成「删掉选中的标注」，
+        // 也不能把按键吞了让框里的字删不掉。
+        if (_textEditor != null || Keyboard.FocusedElement is TextBox) return;
         bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
         bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
         if (_session.OnKeyDown(e.Key, ctrl, shift)) e.Handled = true;
