@@ -179,11 +179,67 @@ public static class SelfTest
 
             controller.Abort();
 
+            // 回归（0.1.13）：带着矩形画具在选区内按下时，1×1 活动矩形立即进图层，
+            // 鼠标一动命中检测就碰到它——以前 OnRing 对负宽高的内缩框直接抛异常，
+            // 整个截图被收摊（用户看到的就是「选了矩形想画，一下就退出截图」）。
+            // 另外原地松手不得留幽灵 1×1 图形。
+            try
+            {
+                session.SetShapeKind(ShapeKind.Rect);
+                session.SetTool(ToolKind.Shape);
+                int layersBefore = session.Layer.Items.Count;
+                var anchor = new Point(session.Selection.X + 235, session.Selection.Y + 155);
+                session.PointerDown(anchor, LeftOrRight.Left);
+                bool hitOk = true;
+                try { session.HitAnnotation(anchor); session.HitItemHandle(anchor); session.OverItem(anchor); }
+                catch { hitOk = false; }
+                session.PointerMove(new Point(anchor.X + 90, anchor.Y + 50));
+                session.PointerUp(new Point(anchor.X + 90, anchor.Y + 50));
+                log.AppendLine($"矩形画具回归：命中检测={(hitOk ? "没炸（对）" : "炸了（不对）")} " +
+                               $"图层 {layersBefore}→{session.Layer.Items.Count}（拖一下成图应 +1）");
+
+                int beforeClick = session.Layer.Items.Count;
+                session.PointerDown(new Point(anchor.X + 40, anchor.Y + 25), LeftOrRight.Left);
+                session.PointerUp(new Point(anchor.X + 40, anchor.Y + 25));
+                log.AppendLine($"原地空点：图层 {beforeClick} → {session.Layer.Items.Count}（应不变，不留幽灵框）");
+                session.SetTool(ToolKind.None);
+            }
+            catch (Exception ex) { log.AppendLine("矩形画具回归 FAILED: " + ex.Message); }
+
             // 4) 退化选区不该成图。以前这里退回整张桌面快照，「只想取消这一下」会变成「导出一张全屏」。
             //    要验这条得用一个真的没框过选区的会话：Abort 只关窗口，旧会话的选区还挂着。
             var blank = ScreenSnapshot.GrabVirtualDesktop();
             var empty = new CaptureSession(blank, displays, 1.0);
             log.AppendLine($"空选区成图：{(empty.RenderResult() == null ? "null（对）" : "非 null（错：会导出整张桌面）")}");
+
+            // 回归（0.1.13）：悬停出红框的窗口，按下鼠标那一刻就该选中，不等松手
+            // （以前按下只落一个 1×1 的自由框选遮罩，屏幕闪一下，松手才吸附窗口）。
+            {
+                var snapSession = new CaptureSession(ScreenSnapshot.GrabVirtualDesktop(), displays, 1.0);
+                Point? snapPoint = null;
+                Int32Rect snapRect = default;
+                var dPrimary = displays.First(x => x.IsPrimary) ?? displays[0];
+                for (int gx = 60; gx < dPrimary.Bounds.Width - 60 && snapPoint == null; gx += 90)
+                {
+                    for (int gy = 60; gy < dPrimary.Bounds.Height - 60; gy += 90)
+                    {
+                        var cand = new Point(dPrimary.Bounds.X + gx, dPrimary.Bounds.Y + gy);
+                        if (WindowSnap.AtPoint((int)cand.X, (int)cand.Y) is { } f && f.Width >= 40 && f.Height >= 40)
+                        {
+                            snapPoint = cand; snapRect = f; break;
+                        }
+                    }
+                }
+                if (snapPoint is { } sp)
+                {
+                    snapSession.PointerDown(sp, LeftOrRight.Left);
+                    log.AppendLine($"点窗口按下即选：按下后选区={snapSession.Selection.Width}x{snapSession.Selection.Height}" +
+                                   $"（应为窗口 {snapRect.Width}x{snapRect.Height}） 相符={snapSession.Selection.Equals(snapRect)}（应为 True）");
+                    snapSession.PointerUp(sp);
+                    log.AppendLine($"点窗口松手保持：选区={snapSession.Selection.Width}x{snapSession.Selection.Height} 相符={snapSession.Selection.Equals(snapRect)}（应为 True）");
+                }
+                else log.AppendLine("点窗口按下即选：桌面上没找到可吸附窗口（跳过）");
+            }
 
             // 5) 出图必须给结果：坏路径要还回那句原因，而不是把异常甩给全局兜底把会话崩掉。
             if (image != null)

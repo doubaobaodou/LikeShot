@@ -81,8 +81,13 @@ public abstract class Annotation
     protected static bool OnRing(Rect r, Point p, double tol)
     {
         if (!new Rect(r.X - tol, r.Y - tol, r.Width + tol * 2, r.Height + tol * 2).Contains(p)) return false;
-        var inner = new Rect(r.X + tol, r.Y + tol, r.Width - tol * 2, r.Height - tol * 2);
-        return inner.Width <= 0 || inner.Height <= 0 || !inner.Contains(p);
+        // Rect 的构造函数遇到负宽高会直接抛 ArgumentException（实测：刚落笔的 1×1 活动矩形
+        // 配上几像素的命中容差，鼠标一动命中检测就崩、整个截图被收摊），
+        // 所以内缩框必须先算尺寸、非正就不构造——防御判断写在构造之后等于没防。
+        double innerW = r.Width - tol * 2;
+        double innerH = r.Height - tol * 2;
+        if (innerW <= 0 || innerH <= 0) return true;
+        return !new Rect(r.X + tol, r.Y + tol, innerW, innerH).Contains(p);
     }
 
     /// <summary>把点从原包围盒按比例映到新包围盒；原盒某一轴退化成一条线时，那一轴取中点。</summary>
@@ -158,8 +163,10 @@ public sealed class EllipseAnnotation(Int32Rect box, Color color, int width) : A
         double ring = Math.Max(tol, StrokeWidth / 2.0);
         if (!InsideEllipse(new Rect(r.X - ring, r.Y - ring, r.Width + ring * 2, r.Height + ring * 2), p)) return false;
         if (FillColor.A != 0) return true;
-        var inner = new Rect(r.X + ring, r.Y + ring, r.Width - ring * 2, r.Height - ring * 2);
-        return inner.Width <= 0 || inner.Height <= 0 || !InsideEllipse(inner, p);
+        // 同 OnRing：内缩框遇到负宽高必须不构造（Rect 构造函数会抛），小到容差盖满就整条算命中。
+        double innerW = r.Width - ring * 2, innerH = r.Height - ring * 2;
+        if (innerW <= 0 || innerH <= 0) return true;
+        return !InsideEllipse(new Rect(r.X + ring, r.Y + ring, innerW, innerH), p);
     }
 
     public override void Translate(double dx, double dy) =>

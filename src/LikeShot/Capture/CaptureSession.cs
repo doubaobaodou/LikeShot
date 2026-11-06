@@ -304,6 +304,25 @@ public sealed class CaptureSession
         // 要调选区用边框手柄，要重选走右键菜单的「重新选择截图区域」。
         if (HasSelection) return;
 
+        // 点击就选中窗口（QQ 口径）：光标下吸得到窗口时，按下那一刻就把选区钉到那个窗口，
+        // 不等松手——否则会先闪一个 1×1 的自由框选遮罩、松手才跳成窗口，屏幕白闪一下。
+        // 按住继续拖仍然转回自由框选：拖动时选区跟着光标长出来，松手按拖出的矩形算
+        // （PointerUp 的 NewRect 兜底不变：没拖远就继续吸附回窗口）。
+        if (Phase == CapturePhase.Choosing)
+        {
+            var snapped = WindowSnap.AtPoint((int)physical.X, (int)physical.Y);
+            if (snapped is { } snapRect && snapRect.Width >= MinSelection && snapRect.Height >= MinSelection)
+            {
+                Selection = snapRect;
+                Phase = CapturePhase.Selected;
+                _dragStart = physical;
+                PolygonPoints = null;
+                _drag = DragMode.NewRect;
+                Changed?.Invoke();
+                return;
+            }
+        }
+
         _dragStart = physical;
         _drag = DragMode.NewRect;
         PolygonPoints = null;
@@ -403,7 +422,14 @@ public sealed class CaptureSession
                 break;
 
             case DragMode.Stroke:
+                _live = null;
+                break;
+
             case DragMode.SizingShape:
+                // 画具按下又原地松手（没拖出任何形状）就把活动图形从图层撤掉：
+                // 图形从落笔那一刻就在图层里，不撤的话一次误点留一个看不见的 1×1 框，
+                // 往后每次命中检测、撤销栈、成图都在它身上绕。
+                DiscardIfDegenerate(physical);
                 _live = null;
                 break;
 
@@ -779,6 +805,26 @@ public sealed class CaptureSession
                 else m.Points.Add(physical);
                 break;
         }
+    }
+
+    /// <summary>
+    /// 松手时判断这次拖动有没有真的画出形状：几乎没动（原地一点）就当误点，撤掉活动图形。
+    /// 笔画不适用这条——点一个点是画笔的正当用法。
+    /// </summary>
+    private void DiscardIfDegenerate(Point physical)
+    {
+        if (_live == null) return;
+        bool degenerate = _live switch
+        {
+            RectAnnotation r => r.Box.Width < 2 && r.Box.Height < 2,
+            EllipseAnnotation e => e.Box.Width < 2 && e.Box.Height < 2,
+            LineAnnotation l => (l.To - l.From).Length < 2,
+            ArrowAnnotation a => (a.To - a.From).Length < 2,
+            MosaicAnnotation m when m.AsRectangle => m.RectBox.Width < 2 && m.RectBox.Height < 2,
+            MosaicAnnotation m => m.Points.Count <= 1,
+            _ => Math.Abs(physical.X - _shapeAnchor.X) + Math.Abs(physical.Y - _shapeAnchor.Y) < 2
+        };
+        if (degenerate) Layer.Remove(_live);
     }
 
     /// <summary>命中检测：从最上层往下找点在哪个已画内容上；正在编辑的那条（Hidden）跳过。</summary>
