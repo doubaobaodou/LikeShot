@@ -414,6 +414,12 @@ public sealed class CaptureOverlay : Window
         OpenTextEditor(physical, "", _session.Color, _session.FontSize, editTarget: null);
     }
 
+    /// <summary>取证用：不经真实鼠标，直接把字框开起来，好拍它那份右键菜单。</summary>
+    internal void OpenTextEditorForTest(Point physical) =>
+        OpenTextEditor(physical, "选中这段字试试右键", _session.Color, _session.FontSize, editTarget: null);
+
+    internal System.Windows.Controls.ContextMenu? TextEditorMenuForTest => _textEditor?.ContextMenu;
+
     /// <summary>双击已有文字：原字先藏起来，编辑框里垫着旧内容，Enter 替换、Esc 不动。</summary>
     private void EditTextEditor(TextAnnotation target)
     {
@@ -450,6 +456,15 @@ public sealed class CaptureOverlay : Window
                 CommitTextEditor();
                 e.Handled = true;
             }
+        };
+        var textMenu = MenuCard.TextMenu(_textEditor);
+        textMenu.PlacementTarget = _textEditor;
+        _textEditor.ContextMenu = textMenu;
+        // 右键只归字框：不拦的话一次右键连截图层的菜单也会一起弹出来。
+        _textEditor.PreviewMouseRightButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            textMenu.IsOpen = true;
         };
         _chrome.Children.Add(_textEditor);
         Canvas.SetLeft(_textEditor, dip.X);

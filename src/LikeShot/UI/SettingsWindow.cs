@@ -170,6 +170,9 @@ public sealed partial class SettingsWindow : Window
     internal string ChordForTest { set { _chord.Text = value; RefreshChordHint(); } }
     internal string YieldForTest { set => _yieldNames.Text = value; }
     internal string SaveDirForTest { set => _saveDir.Text = value; }
+    internal System.Windows.Controls.ContextMenu? SaveDirMenuForTest => _saveDir.ContextMenu;
+    /// <summary>取证用：整段选中保存目录，好拍「有选中」那一档的右键菜单。</summary>
+    internal void SelectSaveDirForTest() => _saveDir.SelectAll();
     internal string StatusForTest => _status.Text;
     internal string ChordHintForTest => _chordHint.Text;
     internal void PickForTest(string format, int poll, int notches)
@@ -498,6 +501,7 @@ public sealed partial class SettingsWindow : Window
     {
         box.Style = FieldStyle();
         box.Width = 230;
+        box.ContextMenu = MenuCard.TextMenu(box);
         ToolTipService.SetToolTip(box, tooltip);
         return box;
     }

@@ -454,6 +454,15 @@ public sealed class PinWindow : Window
             }
         };
         _pinEditor.LostFocus += (_, _) => CommitPinText();
+        var pinTextMenu = MenuCard.TextMenu(_pinEditor);
+        pinTextMenu.PlacementTarget = _pinEditor;
+        _pinEditor.ContextMenu = pinTextMenu;
+        // 右键只归字框：不拦的话一次右键连钉图窗的菜单也会一起弹出来。
+        _pinEditor.PreviewMouseRightButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            pinTextMenu.IsOpen = true;
+        };
         _root.Children.Add(_pinEditor);
         Canvas.SetLeft(_pinEditor, dx);
         Canvas.SetTop(_pinEditor, dy - fontSizePx * DipPerPhysicalY * 0.12);

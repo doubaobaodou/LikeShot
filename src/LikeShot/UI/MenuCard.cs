@@ -159,7 +159,7 @@ internal static class MenuCard
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <ContentPresenter Grid.Column="0" ContentSource="Icon" VerticalAlignment="Center" Width="17"/>
+                                    <ContentPresenter x:Name="icon" Grid.Column="0" ContentSource="Icon" VerticalAlignment="Center" Width="17"/>
                                     <ContentPresenter x:Name="header" Grid.Column="1" ContentSource="Header"
                                                       VerticalAlignment="Center"
                                                       TextBlock.Foreground="#FF1B1B1B" TextBlock.FontSize="13"/>
@@ -181,6 +181,7 @@ internal static class MenuCard
                                 </MultiTrigger>
                                 <Trigger Property="IsEnabled" Value="False">
                                     <Setter TargetName="header" Property="TextBlock.Foreground" Value="#FF9E9E9E"/>
+                                    <Setter TargetName="icon" Property="Opacity" Value="0.4"/>
                                 </Trigger>
                                 <Trigger Property="IsChecked" Value="True">
                                     <Setter TargetName="check" Property="Visibility" Value="Visible"/>

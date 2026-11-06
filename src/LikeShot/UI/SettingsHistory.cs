@@ -79,6 +79,7 @@ public sealed partial class SettingsWindow
 
         _historySearch.Style = FieldStyle();
         _historySearch.Width = 200;
+        _historySearch.ContextMenu = MenuCard.TextMenu(_historySearch);
         _historySearch.ToolTip = "按日期、尺寸或来源里的字找，例如 11-06 或 3200";
         _historySearch.TextChanged += (_, _) => RefreshHistory();
         _historySource.Changed += RefreshHistory;

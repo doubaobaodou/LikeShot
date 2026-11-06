@@ -236,17 +236,22 @@ internal sealed class ColorPickerPanel : StackPanel
         if (!box.IsKeyboardFocused) box.Text = value.ToString(CultureInfo.InvariantCulture);
     }
 
-    private static TextBox MakeChannelBox() => new()
+    private static TextBox MakeChannelBox()
     {
-        Width = 40,
-        FontSize = 11.5,
-        Padding = new Thickness(3, 2, 3, 2),
-        BorderBrush = Theme.Brush(Theme.BarBorder),
-        Background = Theme.Brush(Colors.Transparent),
-        Foreground = Theme.Brush(Theme.LoupeText),
-        CaretBrush = Theme.Brush(Theme.LoupeText),
-        Text = "0"
-    };
+        var box = new TextBox
+        {
+            Width = 40,
+            FontSize = 11.5,
+            Padding = new Thickness(3, 2, 3, 2),
+            BorderBrush = Theme.Brush(Theme.BarBorder),
+            Background = Theme.Brush(Colors.Transparent),
+            Foreground = Theme.Brush(Theme.LoupeText),
+            CaretBrush = Theme.Brush(Theme.LoupeText),
+            Text = "0"
+        };
+        box.ContextMenu = MenuCard.TextMenu(box);
+        return box;
+    }
 
     private Button MakePipetteButton()
     {
