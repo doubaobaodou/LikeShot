@@ -39,7 +39,8 @@ public sealed class ToolbarStrip : Border
     private Button? _filledButton;
     private readonly List<Slider> _widthSliders = [];
     private readonly List<TextBlock> _widthValues = [];
-    private readonly List<(int Index, Button Button)> _fontButtons = [];
+    private readonly List<Slider> _fontSliders = [];
+    private readonly List<TextBlock> _fontValues = [];
     private Button? _pixelButton;
     private Button? _blurButton;
     private Slider? _mosaicSlider;
@@ -489,27 +490,56 @@ public sealed class ToolbarStrip : Border
     private FrameworkElement BuildTextPanel()
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal };
-        double[] sizes = [11, 13.5, 16];
-        string[] tips = ["小号字", "中号字", "大号字"];
-        for (int i = 0; i < 3; i++)
-        {
-            int index = i;
-            var label = new TextBlock
-            {
-                Text = "A",
-                FontSize = sizes[i],
-                FontWeight = FontWeights.Medium,
-                Foreground = Theme.Brush(Theme.IconBrush)
-            };
-            var btn = SubButton(label);
-            btn.ToolTip = tips[i];
-            btn.Click += (_, _) => _session.SetFontIndex(index);
-            _fontButtons.Add((index, btn));
-            row.Children.Add(btn);
-        }
+        row.Children.Add(FontSlider());
         row.Children.Add(SubSeparator());
         row.Children.Add(ColorButton());
         return WrapPanel(row);
+    }
+
+    /// <summary>
+    /// 字号滑条：8–72（96dpi 值）连续可调，右边跟着当前数值。
+    /// 以前只有小/中/大三档，想要「比中号大一点」只能调不出来；现在拖到哪就是哪，
+    /// 选中一条已放好的文字时，拖它改的就是那条文字自己的字号。
+    /// </summary>
+    private FrameworkElement FontSlider()
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(new TextBlock
+        {
+            Text = "字号",
+            FontSize = 11,
+            Foreground = Theme.Brush(Theme.LoupeMuted),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 6, 0)
+        });
+        var slider = new Slider
+        {
+            Minimum = 8,
+            Maximum = 72,
+            Value = _session.FontDp,
+            Width = 110,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsMoveToPointEnabled = true,
+            ToolTip = "文字大小",
+            Style = SliderStyle()
+        };
+        slider.ValueChanged += (_, e) =>
+            _session.SetFontDp((int)Math.Round(e.NewValue, MidpointRounding.AwayFromZero));
+        _fontSliders.Add(slider);
+        row.Children.Add(slider);
+        var value = new TextBlock
+        {
+            Text = _session.FontDp.ToString(),
+            FontSize = 11.5,
+            Foreground = Theme.Brush(Theme.IconBrush),
+            VerticalAlignment = VerticalAlignment.Center,
+            MinWidth = 16,
+            TextAlignment = TextAlignment.Center,
+            Margin = new Thickness(6, 0, 0, 0)
+        };
+        _fontValues.Add(value);
+        row.Children.Add(value);
+        return row;
     }
 
     private FrameworkElement BuildMosaicPanel()
@@ -834,11 +864,14 @@ public sealed class ToolbarStrip : Border
             foreach (var (tool, btn) in _toolButtons)
                 btn.Background = tool == _session.Tool ? Theme.Brush(Theme.ButtonPushed) : Brushes.Transparent;
 
-            bool showSub = _mode != ToolbarMode.LongCapture && _session.Tool != ToolKind.None;
+            // 二级条认的是「现在在调哪一类」：工具激活时是工具，
+            // 没激活工具但选中了已画内容时，显示那一类的属性面板，不然选中了却没地方改。
+            ToolKind panelTool = _session.Tool != ToolKind.None ? _session.Tool : _session.PanelTool ?? ToolKind.None;
+            bool showSub = _mode != ToolbarMode.LongCapture && panelTool != ToolKind.None;
             _subHost.Visibility = showSub ? Visibility.Visible : Visibility.Collapsed;
 
-            // 换工具（含切回「无」）时把颜色下拉和取色板收起来，别让上一支工具的色板挂着。
-            if (_session.Tool != _lastTool)
+            // 换面板（含切回「无」）时把颜色下拉和取色板收起来，别让上一支工具的色板挂着。
+            if (panelTool != _lastTool)
             {
                 if (_colorStripOpen)
                 {
@@ -847,13 +880,13 @@ public sealed class ToolbarStrip : Border
                 }
                 if (_picker != null && _picker.Visibility == Visibility.Visible)
                     _picker.Visibility = Visibility.Collapsed;
-                _lastTool = _session.Tool;
+                _lastTool = panelTool;
             }
 
             if (showSub)
             {
                 foreach (var (tool, panel) in _subPanels)
-                    panel.Visibility = tool == _session.Tool ? Visibility.Visible : Visibility.Collapsed;
+                    panel.Visibility = tool == panelTool ? Visibility.Visible : Visibility.Collapsed;
             }
 
             foreach (var (kind, btn) in _shapeButtons)
@@ -881,8 +914,15 @@ public sealed class ToolbarStrip : Border
             foreach (var value in _widthValues)
                 value.Text = _session.WidthDp.ToString();
 
-            foreach (var (index, btn) in _fontButtons)
-                btn.Background = index == _session.FontIndex ? Theme.Brush(Theme.ButtonPushed) : Brushes.Transparent;
+            foreach (var slider in _fontSliders)
+            {
+                // 和粗细滑条同一套：只有取整后还对不上（别的路径改了字号，比如拖角缩放）才回写，
+                // 不然手正拖着滑块会被自己写回去的值顶一下。
+                if ((int)Math.Round(slider.Value, MidpointRounding.AwayFromZero) != _session.FontDp)
+                    slider.Value = _session.FontDp;
+            }
+            foreach (var value in _fontValues)
+                value.Text = _session.FontDp.ToString();
 
             if (_pixelButton != null)
                 _pixelButton.Background = _session.MosaicKind == MosaicStyle.Pixelate ? Theme.Brush(Theme.ButtonPushed) : Brushes.Transparent;

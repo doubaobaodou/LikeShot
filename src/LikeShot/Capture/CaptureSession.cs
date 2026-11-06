@@ -49,9 +49,15 @@ public sealed class CaptureSession
 
     /// <summary>线宽按 96dpi 的像素记，落笔时乘 UiScale——滑条上显示的数字就是它。</summary>
     public int WidthDp { get; private set; } = 4;
-    public int FontIndex { get; private set; } = 1;
+
+    /// <summary>字号同样按 96dpi 记，连续可调；以前只有小/中/大三档，改不了正好想要的那个大小。</summary>
+    public int FontDp { get; private set; } = 22;
+
     public MosaicStyle MosaicKind { get; private set; } = MosaicStyle.Pixelate;
     public int MosaicStrength { get; private set; } = 10;
+
+    /// <summary>当前选中的已画内容。画完的东西不再是死的：能点出来接着挪、缩放、改属性、删掉。</summary>
+    public Annotation? Selected { get; private set; }
 
     public AnnotationLayer Layer { get; }
     public MosaicSource? Mosaics { get; private set; }
@@ -75,14 +81,37 @@ public sealed class CaptureSession
     private Annotation? _live;
     private Point? _polygonSeed;
     private Point _shapeAnchor;
-    private TextAnnotation? _movingText;
-    private Vector _textMoveOffset;
+    private Point _itemLast;
+    private Rect _itemOriginalBounds;
+    private int _itemHandle = -1;
 
-    private enum DragMode { None, NewRect, MoveRect, ResizeRect, Stroke, SizingShape, Polygon, MovingText }
+    private enum DragMode
+    {
+        None, NewRect, MoveRect, ResizeRect, Stroke, SizingShape, Polygon, MovingText,
+
+        /// <summary>拖走选中的标注。</summary>
+        MovingItem,
+
+        /// <summary>拖选中标注包围盒的手柄改它的大小。</summary>
+        SizingItem
+    }
 
     public int StrokeWidth => (int)Math.Round(WidthDp * UiScale);
-    public int FontSize => Theme.FontSizesAt(UiScale)[Math.Clamp(FontIndex, 0, 2)];
+    public int FontSize => (int)Math.Round(FontDp * UiScale);
     public int BadgeRadius => Theme.BadgeRadiusAt(UiScale);
+
+    /// <summary>选中了东西但没激活任何画具时，二级条要显示这一类属性的面板，不然没地方改颜色粗细。</summary>
+    public ToolKind? PanelTool => Selected switch
+    {
+        RectAnnotation or EllipseAnnotation or LineAnnotation => ToolKind.Shape,
+        ArrowAnnotation => ToolKind.Arrow,
+        StrokeAnnotation => ToolKind.Brush,
+        MosaicAnnotation => ToolKind.Mosaic,
+        TextAnnotation => ToolKind.Text,
+        BadgeAnnotation => ToolKind.Marker,
+        null => null,
+        _ => null
+    };
 
     public bool HasSelection => Phase == CapturePhase.Selected;
 
@@ -105,7 +134,26 @@ public sealed class CaptureSession
         PolygonPoints = null;
         Mosaics = null;
         Layer.Clear();
+        Selected = null;
         Tool = ToolKind.None;
+        Changed?.Invoke();
+    }
+
+    /// <summary>选中/取消选中一个已画内容。传 null 就是取消。</summary>
+    public void Select(Annotation? item)
+    {
+        if (ReferenceEquals(Selected, item)) return;
+        Selected = item;
+        Changed?.Invoke();
+    }
+
+    /// <summary>删掉选中的那个；撤销栈照旧，Ctrl+Z 还能把它找回来。</summary>
+    public void DeleteSelected()
+    {
+        if (Selected == null) return;
+        var item = Selected;
+        Selected = null;
+        Layer.Remove(item);
         Changed?.Invoke();
     }
 
@@ -129,6 +177,7 @@ public sealed class CaptureSession
         Selection = rect;
         PolygonPoints = null;
         Phase = CapturePhase.Selected;
+        Selected = null;
         RebuildMosaics();
         Changed?.Invoke();
     }
@@ -196,24 +245,39 @@ public sealed class CaptureSession
             return;
         }
 
-        // 点在已放置的文字上就拖动它——不管当前是什么画具，QQ 也这样；
-        // 想在文字旁边新建，点文字外面就行。
+        // 选区内的点击优先级：选中标注自己的手柄 > 命中已画内容（选中并准备拖走）> 落新笔 > 挪/缩放选区。
+        // 「点到东西就是选中」是拍板过的口径，所以它压在当前画具前面；
+        // 要在已有内容旁边再画一个，点在空白处就行。
         if (HasSelection && Inside(physical))
         {
-            var hit = HitText(physical);
+            if (Selected != null)
+            {
+                int h = HitItemHandle(physical);
+                if (h >= 0)
+                {
+                    _itemHandle = h;
+                    _itemOriginalBounds = Selected.Bounds;
+                    _drag = DragMode.SizingItem;
+                    return;
+                }
+            }
+
+            var hit = HitAnnotation(physical);
             if (hit != null)
             {
-                _movingText = hit;
-                _textMoveOffset = physical - hit.Position;
-                _drag = DragMode.MovingText;
+                Select(hit);
+                _itemLast = physical;
+                _drag = DragMode.MovingItem;
                 return;
             }
-        }
 
-        if (HasSelection && Tool != ToolKind.None && Inside(physical))
-        {
-            BeginAnnotation(physical);
-            return;
+            Select(null);
+
+            if (Tool != ToolKind.None)
+            {
+                BeginAnnotation(physical);
+                return;
+            }
         }
 
         if (HasSelection)
@@ -283,8 +347,16 @@ public sealed class CaptureSession
                 SizeLive(physical);
                 break;
 
-            case DragMode.MovingText:
-                if (_movingText != null) _movingText.Position = physical - _textMoveOffset;
+            case DragMode.MovingItem:
+                if (Selected != null)
+                {
+                    Selected.Translate(physical.X - _itemLast.X, physical.Y - _itemLast.Y);
+                    _itemLast = physical;
+                }
+                break;
+
+            case DragMode.SizingItem:
+                if (Selected != null) Selected.SetBounds(ResizeItem(_itemOriginalBounds, _itemHandle, physical));
                 break;
 
             default:
@@ -330,13 +402,14 @@ public sealed class CaptureSession
                 RebuildMosaics();
                 break;
 
-            case DragMode.MovingText:
-                _movingText = null;
-                break;
-
             case DragMode.Stroke:
             case DragMode.SizingShape:
                 _live = null;
+                break;
+
+            case DragMode.MovingItem:
+            case DragMode.SizingItem:
+                _itemHandle = -1;
                 break;
         }
 
@@ -353,11 +426,13 @@ public sealed class CaptureSession
         if (hit != null)
         {
             _drag = DragMode.None;      // 双击的第二次按下可能还挂着拖动
-            _movingText = null;
+            _itemHandle = -1;
             TextEditRequested?.Invoke(hit);
             return;
         }
         if (Tool != ToolKind.None) return;
+        // 双击在任何一个已画内容上都不该当成「复制收工」——那一下多半是想调它。
+        if (HitAnnotation(physical) != null) return;
         FinishRequested?.Invoke(new FinishRequest(CopyMode.Clipboard));
     }
 
@@ -367,6 +442,13 @@ public sealed class CaptureSession
     {
         if (key == Key.Escape)
         {
+            // 三层退出：先取消选中，再收起工具，最后才整个关掉。
+            // 以前按下 Esc 直接就把会话撤了，选错东西想反悔连个退路都没有。
+            if (Selected != null)
+            {
+                Select(null);
+                return true;
+            }
             if (Tool != ToolKind.None)
             {
                 Tool = ToolKind.None;
@@ -374,6 +456,12 @@ public sealed class CaptureSession
                 return true;
             }
             ExitRequested?.Invoke();
+            return true;
+        }
+
+        if (key is Key.Delete or Key.Back && Selected != null)
+        {
+            DeleteSelected();
             return true;
         }
 
@@ -424,7 +512,9 @@ public sealed class CaptureSession
     {
         Color = color;
         if (_live != null) _live.Color = color;
+        if (Selected != null) Selected.Color = color;
         ApplyLiveFill();
+        ApplySelectedFill();
         Changed?.Invoke();
     }
 
@@ -438,6 +528,7 @@ public sealed class CaptureSession
     {
         ShapeFilled = filled;
         ApplyLiveFill();
+        ApplySelectedFill();
         Changed?.Invoke();
     }
 
@@ -445,12 +536,15 @@ public sealed class CaptureSession
     {
         WidthDp = Math.Clamp(dp, 1, 20);
         if (_live != null) _live.StrokeWidth = StrokeWidth;
+        if (Selected != null) Selected.StrokeWidth = StrokeWidth;
         Changed?.Invoke();
     }
 
-    public void SetFontIndex(int index)
+    /// <summary>字号连续可调：滑条给的是 96dpi 值，落到文字上是物理像素。</summary>
+    public void SetFontDp(int dp)
     {
-        FontIndex = Math.Clamp(index, 0, 2);
+        FontDp = Math.Clamp(dp, 8, 72);
+        if (Selected is TextAnnotation t) t.FontSize = FontSize;
         Changed?.Invoke();
     }
 
@@ -477,10 +571,22 @@ public sealed class CaptureSession
         }
     }
 
+    /// <summary>选中了已画内容时，属性面板改的就不只是「下一笔画成什么样」，而是它本身。</summary>
+    private void ApplySelectedFill()
+    {
+        var fill = ShapeFilled ? Color : Colors.Transparent;
+        switch (Selected)
+        {
+            case RectAnnotation r: r.FillColor = fill; break;
+            case EllipseAnnotation e: e.FillColor = fill; break;
+        }
+    }
+
     public void SetMosaicStyle(MosaicStyle style)
     {
         MosaicKind = style;
         if (_live is MosaicAnnotation m) m.Style = style;
+        if (Selected is MosaicAnnotation sm) sm.Style = style;
         Changed?.Invoke();
     }
 
@@ -488,13 +594,20 @@ public sealed class CaptureSession
     {
         MosaicStrength = Math.Clamp(strength, 2, 40);
         if (_live is MosaicAnnotation liveMosaic) liveMosaic.Strength = MosaicStrength;
+        if (Selected is MosaicAnnotation selMosaic) selMosaic.Strength = MosaicStrength;
         // 不能把 Mosaics 置空：预览层的绘制以它是否为 null 做开关，置空会让
         // 已经画好的所有标注一起消失，直到下一次拖动选区才回来。
         RebuildMosaics();
         Changed?.Invoke();
     }
 
-    public void Undo() => Layer.UndoLast();
+    public void Undo()
+    {
+        Layer.UndoLast();
+        // 撤销掉的可能正是选中的那条，留着它选中框会指着一块不存在的内容。
+        if (Selected != null && !Layer.Items.Contains(Selected)) Selected = null;
+        Changed?.Invoke();
+    }
 
     public void Finish(CopyMode mode) => FinishRequested?.Invoke(new FinishRequest(mode));
 
@@ -668,32 +781,59 @@ public sealed class CaptureSession
         }
     }
 
-    /// <summary>命中检测：点落在了哪条已放置的文字上（从最上层往下找），没有就 null。</summary>
-    public TextAnnotation? HitText(Point p)
+    /// <summary>命中检测：从最上层往下找点在哪个已画内容上；正在编辑的那条（Hidden）跳过。</summary>
+    public Annotation? HitAnnotation(Point p)
     {
+        double tol = HitTolerance;
         for (int i = Layer.Items.Count - 1; i >= 0; i--)
         {
-            if (Layer.Items[i] is not TextAnnotation t || string.IsNullOrEmpty(t.Text)) continue;
-            var formatted = new FormattedText(
-                t.Text,
-                System.Globalization.CultureInfo.CurrentCulture,
-                FlowDirection.LeftToRight,
-                new Typeface(new FontFamily("Microsoft YaHei, PingFang SC, Segoe UI"),
-                    FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
-                t.FontSize,
-                Theme.Brush(Theme.LoupeText),
-                1);
-            // 和绘制时一样留 4px 右边距，命中框略放宽 3px 手感更好。
-            var bounds = new Rect(t.Position.X - 3, t.Position.Y - 3,
-                Math.Min(formatted.Width, Selection.X + Selection.Width - t.Position.X) + 9,
-                formatted.Height + 6);
-            if (bounds.Contains(p)) return t;
+            var item = Layer.Items[i];
+            if (item.Hidden) continue;
+            if (item.Hit(p, tol)) return item;
         }
         return null;
     }
 
-    /// <summary>鼠标悬停在文字上时给个抓手光标。</summary>
-    public bool OverText(Point p) => HasSelection && HitText(p) != null;
+    /// <summary>双击进编辑态用的：命中的必须是一条文字。</summary>
+    public TextAnnotation? HitText(Point p) => HitAnnotation(p) as TextAnnotation;
+
+    /// <summary>悬停在已画内容上要给抓手，落在它的手柄上要给缩放光标。</summary>
+    public bool OverItem(Point p) => HasSelection && HitAnnotation(p) != null;
+
+    /// <summary>选中内容的八个包围盒手柄（物理像素），画的和点的共用同一份。</summary>
+    public Point[] ItemHandlePoints() => Selected == null ? [] : HandlePoints(Selected.Bounds);
+
+    public int HitItemHandle(Point p)
+    {
+        if (Selected == null) return -1;
+        double tol = HitTolerance;
+        var handles = ItemHandlePoints();
+        for (int i = 0; i < handles.Length; i++)
+            if (Math.Abs(handles[i].X - p.X) <= tol && Math.Abs(handles[i].Y - p.Y) <= tol) return i;
+        return -1;
+    }
+
+    /// <summary>手柄和边线的容差：物理像素，高屏上不至于小到点不着。</summary>
+    private double HitTolerance => Math.Max(6, 10 / UiScale);
+
+    /// <summary>把选中标注的包围盒按手柄拖成新框，再交给 SetBounds 落到它自己的几何上。</summary>
+    private static Rect ResizeItem(Rect original, int handle, Point p)
+    {
+        double left = original.X, top = original.Y, right = original.Right, bottom = original.Bottom;
+        switch (handle)
+        {
+            case 0: left = p.X; top = p.Y; break;
+            case 1: top = p.Y; break;
+            case 2: right = p.X; top = p.Y; break;
+            case 3: right = p.X; break;
+            case 4: right = p.X; bottom = p.Y; break;
+            case 5: bottom = p.Y; break;
+            case 6: left = p.X; bottom = p.Y; break;
+            case 7: left = p.X; break;
+        }
+        return new Rect(Math.Min(left, right), Math.Min(top, bottom),
+            Math.Max(4, Math.Abs(right - left)), Math.Max(4, Math.Abs(bottom - top)));
+    }
 
     /// <summary>
     /// 命中检测：八个手柄点之外，四条边框线整条也能拽（QQ 就是拖着边放大缩小的），
@@ -714,11 +854,14 @@ public sealed class CaptureSession
         return -1;
     }
 
-    public static Point[] HandlePoints(Int32Rect s) =>
+    public static Point[] HandlePoints(Int32Rect s) => HandlePoints(new Rect(s.X, s.Y, s.Width, s.Height));
+
+    /// <summary>八个手柄：四角 + 四边中点。选区框和选中标注的框都用这一份布局。</summary>
+    public static Point[] HandlePoints(Rect s) =>
     [
-        new(s.X, s.Y), new(s.X + s.Width / 2d, s.Y), new(s.X + s.Width, s.Y),
-        new(s.X + s.Width, s.Y + s.Height / 2d), new(s.X + s.Width, s.Y + s.Height),
-        new(s.X + s.Width / 2d, s.Y + s.Height), new(s.X, s.Y + s.Height), new(s.X, s.Y + s.Height / 2d)
+        new(s.X, s.Y), new(s.X + s.Width / 2, s.Y), new(s.Right, s.Y),
+        new(s.Right, s.Y + s.Height / 2), new(s.Right, s.Bottom),
+        new(s.X + s.Width / 2, s.Bottom), new(s.X, s.Bottom), new(s.X, s.Y + s.Height / 2)
     ];
 
     private static Int32Rect Resize(Int32Rect original, int handle, Point p)

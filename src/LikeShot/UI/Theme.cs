@@ -81,8 +81,6 @@ public static class Theme
 
     public static readonly Color DefaultAnnotationColor = Color.FromRgb(0xFB, 0x38, 0x38);
 
-    public static int[] FontSizesAt(double scale) => [(int)Math.Round(16 * scale), (int)Math.Round(22 * scale), (int)Math.Round(30 * scale)];
-
     public static int BadgeRadiusAt(double scale) => (int)Math.Round(10 * scale);
 
     public static SolidColorBrush Brush(Color c)

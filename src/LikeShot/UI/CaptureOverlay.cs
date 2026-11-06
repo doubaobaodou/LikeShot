@@ -369,6 +369,8 @@ public sealed class CaptureOverlay : Window
 
     private void OnKeyDownLocal(object sender, KeyEventArgs e)
     {
+        // 输入框开着的时候键盘归打字的人：这时候 Delete/Backspace 是删字，不是删标注。
+        if (_textEditor != null) return;
         bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
         bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
         if (_session.OnKeyDown(e.Key, ctrl, shift)) e.Handled = true;
@@ -378,27 +380,29 @@ public sealed class CaptureOverlay : Window
     {
         if (_pickingColor) { Cursor = Cursors.Cross; return; }
         if (!_session.HasSelection) { Cursor = Cursors.Cross; return; }
-        if (_session.OverText(physical)) { Cursor = Cursors.Hand; return; }
+
+        // 选中内容的手柄优先于一切：它压在选择区的边框手柄之上，两者挨得很近时先想用户要改谁。
+        int itemHandle = _session.HitItemHandle(physical);
+        if (itemHandle >= 0) { Cursor = ResizeCursor(itemHandle); return; }
+        if (_session.OverItem(physical)) { Cursor = Cursors.SizeAll; return; }
         if (_session.Tool != ToolKind.None) { Cursor = _session.Tool == ToolKind.Text ? Cursors.IBeam : Cursors.Cross; return; }
 
         // 手柄点和四条边框线都给缩放光标，边框外一 needle 的容差也算数。
         int handle = _session.HitHandle(physical);
-        if (handle >= 0)
-        {
-            Cursor = handle switch
-            {
-                0 or 4 => Cursors.SizeNWSE,
-                2 or 6 => Cursors.SizeNESW,
-                1 or 5 => Cursors.SizeNS,
-                3 or 7 => Cursors.SizeWE,
-                _ => Cursors.Arrow
-            };
-            return;
-        }
+        if (handle >= 0) { Cursor = ResizeCursor(handle); return; }
 
         if (!_session.Inside(physical)) { Cursor = Cursors.Cross; return; }
         Cursor = Cursors.SizeAll;
     }
+
+    private static Cursor ResizeCursor(int handle) => handle switch
+    {
+        0 or 4 => Cursors.SizeNWSE,
+        2 or 6 => Cursors.SizeNESW,
+        1 or 5 => Cursors.SizeNS,
+        3 or 7 => Cursors.SizeWE,
+        _ => Cursors.Arrow
+    };
 
     // ---------- 文字工具 ----------
 
@@ -556,6 +560,7 @@ public sealed class CaptureOverlay : Window
                     dc.Pop();
                 }
                 DrawSelectionChrome(dc, session, scale, keep);
+                SelectionChrome.Draw(dc, session, scale);
             }
 
             if (session.ShowingLoupe && App.Config.ShowMagnifier)

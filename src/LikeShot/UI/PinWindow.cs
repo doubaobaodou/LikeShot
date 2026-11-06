@@ -178,19 +178,19 @@ public sealed class PinWindow : Window
 
         if (e.ClickCount == 2 && _session.Tool == ToolKind.None)
         {
-            // 双击文字 = 改字；双击空白 = 复制收工。
+            // 双击文字 = 改字；双击空白 = 复制收工。点在任何一个已画内容上都不收工。
             var hit = _session.HitText(ToPhysical(pos));
             if (hit != null)
             {
                 OpenPinTextEditor(hit.Position, hit.Text, hit.Color, hit.FontSize, editTarget: hit);
                 return;
             }
-            FinishToClipboard();
+            if (_session.HitAnnotation(ToPhysical(pos)) == null) FinishToClipboard();
             return;
         }
 
-        // 画具激活时点图片区落笔；点在下方工具条区域不算。
-        if (_session.Tool != ToolKind.None && pos.X <= _imageW && pos.Y <= _imageH)
+        // 点图片区：画具落笔，或者点中已画内容把它选中/拖动；点在下方工具条区域不算。
+        if (ClickGoesToSession(ToPhysical(pos)))
         {
             // 捕获鼠标：拖出图片（甚至窗口）外笔画也不能断，松手时才收笔。
             _drawing = true;
@@ -366,6 +366,26 @@ public sealed class PinWindow : Window
 
     private void UpdateGripCursor(Point pos)
     {
+        // 图片区里先看选中的标注：手柄给缩放光标，内容本体给移动光标——
+        // 这一下点下去走的是「挪它」，不再是「拖窗口」。
+        if (pos.X <= _imageW && pos.Y <= _imageH)
+        {
+            var physical = ToPhysical(pos);
+            int h = _session.HitItemHandle(physical);
+            if (h >= 0)
+            {
+                Cursor = h switch
+                {
+                    0 or 4 => Cursors.SizeNWSE,
+                    2 or 6 => Cursors.SizeNESW,
+                    1 or 5 => Cursors.SizeNS,
+                    _ => Cursors.SizeWE
+                };
+                return;
+            }
+            if (_session.OverItem(physical)) { Cursor = Cursors.SizeAll; return; }
+        }
+
         Cursor = HitGrip(pos) switch
         {
             Grip.Left or Grip.Right => Cursors.SizeWE,
@@ -379,6 +399,23 @@ public sealed class PinWindow : Window
     private Point ToPhysical(Point dip) => new(
         _sourceRect.X + dip.X / DipPerPhysicalX,
         _sourceRect.Y + dip.Y / DipPerPhysicalY);
+
+    private Point ToDip(Point physical) => new(
+        (physical.X - _sourceRect.X) * DipPerPhysicalX,
+        (physical.Y - _sourceRect.Y) * DipPerPhysicalY);
+
+    /// <summary>
+    /// 这一下点下去归谁：图片区里带着画具、或点中了已画内容/它的拖角手柄，就交给会话；
+    /// 否则交给窗口自己（拖着钉图窗走）。点判断和自检走同一个方法，免得测的是一套、跑的是另一套。
+    /// </summary>
+    internal bool ClickGoesToSession(Point physical)
+    {
+        var pos = ToDip(physical);
+        if (pos.X > _imageW || pos.Y > _imageH) return false;
+        return _session.Tool != ToolKind.None
+               || _session.HitItemHandle(physical) >= 0
+               || _session.OverItem(physical);
+    }
 
     // ---------- 文字工具 ----------
 
@@ -548,6 +585,8 @@ public sealed class PinWindow : Window
             dc.DrawImage(_session.Snapshot.Image, new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height));
             if (_session.Mosaics != null)
                 _session.Layer.DrawAll(dc, new RenderContext(_session.Mosaics, sx * _owner.BaseScale, _session.Mosaics.Region));
+            // 选中框跟着图片一起缩放：这里一 DIP 等于多少物理像素是 1/sx，不是截图层那个 scale。
+            SelectionChrome.Draw(dc, _session, 1 / Math.Max(0.01, sx));
             dc.Pop();
             dc.Pop();
             dc.Pop();
