@@ -33,24 +33,32 @@ public sealed class LongStitcher
     private int _offset;
     private int _footer;
     private int _lastStep;
+    private readonly int _reservedFooter;
 
     /// <summary>画布里只出现一次的行哈希 → 它的画布行号；出现第二次就从中剔除。</summary>
     private readonly Dictionary<long, int> _uniqueRow = [];
     private readonly Dictionary<long, int> _rowCount = [];
     private readonly StringBuilder _diag = new();
 
-    public LongStitcher(Int32Rect firstRect, byte[] firstFrame, int firstStride)
+    /// <summary>
+    /// reservedFooterRows：帧底固定留给自家工具栏的行数（工具栏压进选区底边时）。
+    /// 这些行每一拍都被掩成纯色，从头到尾都不是页面内容——从第一帧起就不进画布，
+    /// 滚动判定也把它们当固定底栏，不滚动也不会烤进长图。
+    /// </summary>
+    public LongStitcher(Int32Rect firstRect, byte[] firstFrame, int firstStride, int reservedFooterRows = 0)
     {
         if (firstStride != firstRect.Width * 4) throw new ArgumentException("帧步长必须等于宽×4", nameof(firstStride));
         _width = firstRect.Width;
         _stride = _width * 4;
+        _reservedFooter = Math.Clamp(reservedFooterRows, 0, firstRect.Height / 2);
         int capacity = Math.Min(MaxHeight, Math.Max(firstRect.Height * 8, 2048));
         _buffer = new byte[capacity * _stride];
         _rowHash = new long[capacity];
 
-        int rows = Math.Min(firstRect.Height, capacity);
+        int rows = Math.Max(0, Math.Min(firstRect.Height - _reservedFooter, capacity));
         AppendRows(firstFrame, firstStride, 0, rows);
-        _previous = RowHashes(firstFrame, firstStride, rows);
+        _previous = RowHashes(firstFrame, firstStride, firstRect.Height);
+        _footer = _reservedFooter;
     }
 
     public int Width => _width;
@@ -77,7 +85,8 @@ public sealed class LongStitcher
         }
 
         var (top, bottom) = FixedBands(hashes);
-        int footer = frameHeight - bottom;
+        // 帧底预留（自家工具栏压在选区底边）按固定底栏算：那一块永远不算新增内容。
+        int footer = Math.Max(frameHeight - bottom, _reservedFooter);
 
         // 投票量出来的是「这一帧第 0 行落在画布哪一行」这个绝对位置，不是这次滚掉的行数。
         // 之前把它当增量累加，偏移量成倍跑飞，长图里内容就是这么翻倍贴的。

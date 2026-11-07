@@ -520,6 +520,50 @@ public static class SelfTest
                 log.AppendLine($"抓屏复用：连续两帧{(reused ? "同一块缓冲（不再每拍新配，对）" : "（换了缓冲，不对）")}");
             }
 
+            // 工具栏落位回归（0.1.18）：选区几乎满屏、上下都放不下工具栏时，
+            // 只能压进选区底边内侧——以前会兜到屏幕顶上，工具栏压住选区顶部，
+            // 每一帧被抓进去再掩成纯色，黑框就这么烤在长图顶上了。
+            {
+                double t1 = ToolbarWindow.PickBarTop(100, 800, 0, 1000, 70);   // 下面放得下
+                double t2 = ToolbarWindow.PickBarTop(100, 990, 0, 1000, 70);   // 下面放不下、上面放得下
+                double t3 = ToolbarWindow.PickBarTop(0, 1000, 0, 1000, 70);    // 都放不下：压底边内侧
+                bool ok = t1 == 810 && t2 == 20 && t3 == 926;
+                log.AppendLine($"工具栏落位：下方={t1:0} 上方={t2:0} 满屏={t3:0} " +
+                               $"{(ok ? "（下方→上方→压底边，绝不压顶，对）" : "（不对）")}");
+            }
+
+            // 预留底栏回归（0.1.18）：压在选区底边的工具栏那几行是自家像素，
+            // 从第一帧起就不能进画布——不滚动也不该在长图里留一块纯色。
+            {
+                int fw = 60, fh = 200, resv = 50, pageH = 300;
+                static byte[] Frame(int off, int pageH, int fw, int fh, int resv)
+                {
+                    var f = new byte[fh * fw * 4];
+                    for (int y = 0; y < fh - resv; y++)
+                    {
+                        int pageRow = Math.Min(off + y, pageH - 1);
+                        byte v = (byte)(pageRow + 1);
+                        for (int x = 0; x < fw; x++)
+                        {
+                            int i = y * fw * 4 + x * 4;
+                            f[i] = v; f[i + 1] = v; f[i + 2] = v; f[i + 3] = 0xFF;
+                        }
+                    }
+                    return f;   // 底部 resv 行全 0：模拟掩成纯色的自家工具栏
+                }
+                int stride = fw * 4;
+                var s = new LongStitcher(new Int32Rect(0, 0, fw, fh), Frame(0, pageH, fw, fh, resv), stride, resv);
+                int h1 = s.Height;
+                int h2 = h1 + s.Feed(Frame(40, pageH, fw, fh, resv), stride, fh);
+                int h3 = h2 + s.Feed(Frame(80, pageH, fw, fh, resv), stride, fh);
+                var row = new byte[stride];
+                for (int x = 0; x < fw; x++) { row[x * 4] = 150; row[x * 4 + 1] = 150; row[x * 4 + 2] = 150; row[x * 4 + 3] = 0xFF; }
+                bool rowsOk = s.CanvasRowHashes()[149] == LongStitcher.HashRow(row, 0, stride);
+                bool ok = h1 == 150 && h2 == 190 && h3 == 230 && rowsOk;
+                log.AppendLine($"预留底栏：画布 {h1}→{h2}→{h3}（应 150→190→230，纯色条一帧不进） " +
+                               $"内容对位={(rowsOk ? "对" : "错")} 判定={(ok ? "对" : "（不对）")}");
+            }
+
             // 实时预览：得在选区外的暗带里安家（上方暗带 → 下方暗带 → 都放不下就藏），
             // 压回选区里就会把行哈希搅乱。
             var preview = runner.PreviewForTest;

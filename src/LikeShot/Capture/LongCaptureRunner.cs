@@ -93,16 +93,20 @@ public sealed class LongCaptureRunner : IDisposable
         // 工具栏的像素被烤进长图，预览更是每一拍都在变，行哈希全被搅乱，
         // 拼接器认不出滚动量就整帧整帧往画布上贴——滚到底了还在自己拼就是它。
         // 所以统一把这些矩形填成恒定纯色：哈希稳了，长图里也只是一块纯色而不是我们的界面。
+        // 压在选区底边的那条更干脆：告诉拼接器「这几行是自家像素」，从第一帧起就不进画布。
         bool occluded = false;
+        int reserved = 0;
         foreach (var rect in OccludingRects())
         {
             MaskRect(buffer, stride, _region, rect);
             occluded = true;
+            if (rect.Y + rect.Height >= _region.Y + _region.Height)
+                reserved = Math.Max(reserved, rect.Height);
         }
 
         if (_stitcher == null)
         {
-            _stitcher = new LongStitcher(_region, buffer, stride);
+            _stitcher = new LongStitcher(_region, buffer, stride, reserved);
         }
         else
         {
@@ -134,7 +138,8 @@ public sealed class LongCaptureRunner : IDisposable
         else
         {
             _bar.SetStatus($"已拼接 {_stitcher.Height} 像素高" +
-                           (occluded ? "（自家悬浮窗压在选区里：长图里会留一块纯色）" : ""));
+                           (reserved > 0 ? "（工具栏压在选区底边：这一条不会拼进长图）"
+                           : occluded ? "（自家悬浮窗压在选区里：长图里会留一块纯色）" : ""));
         }
 
         _preview.UpdateStitch(_stitcher, _region);
@@ -680,20 +685,39 @@ internal sealed class ToolbarWindow : Window
     public void ShowBar(IReadOnlyList<Display> displays, Int32Rect region, double scale)
     {
         Show();
+        UpdateLayout();   // SizeToContent 的实际高宽要等一轮布局才有，否则落位全程按 0 算
         var display = displays.FirstOrDefault(d => d.Contains(region.X + region.Width / 2, region.Bottom())) ?? displays[0];
         double w = ActualWidth > 0 ? ActualWidth : 420;
         double left = (region.X + region.Width / 2d - display.Bounds.X) / display.Scale - w / 2;
-        double top = (region.Bottom() - display.Bounds.Y) / display.Scale + 10;
-        if (top + ActualHeight > display.Bounds.Height / display.Scale)
-            top = (region.Y - display.Bounds.Y) / display.Scale - ActualHeight - 10;
+        Top = PickBarTop(
+            (region.Y - display.Bounds.Y) / display.Scale,
+            (region.Bottom() - display.Bounds.Y) / display.Scale,
+            display.Bounds.Y / display.Scale,
+            (display.Bounds.Y + display.Bounds.Height) / display.Scale,
+            ActualHeight);
 
         Left = Math.Clamp(left, display.Bounds.X / display.Scale + 4, (display.Bounds.X + display.Bounds.Width) / display.Scale - w - 4);
-        Top = Math.Max(display.Bounds.Y / display.Scale + 4, top);
 
         var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
         Win32.SetWindowLong(hwnd, Win32.GWL_EXSTYLE, Win32.GetWindowLong(hwnd, Win32.GWL_EXSTYLE) | Win32.WS_EX_TOOLWINDOW);
         Win32.SetWindowPos(hwnd, Win32.HWND_TOPMOST, 0, 0, 0, 0, Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
         _ = scale;
+    }
+
+    /// <summary>
+    /// 工具栏落位：选区下方 → 选区上方 → 压进选区底边内侧。
+    /// 以前最后一档是兜到屏幕顶上，工具栏压住选区顶部：每一帧都被抓进去、掩成一块纯色，
+    /// 黑框就这么烤在长图顶上了。压底边没事——拼接器把这一条当固定底栏预留，一帧都不进长图。
+    /// internal 供自检直测。
+    /// </summary>
+    internal static double PickBarTop(double regionTop, double regionBottom, double screenTop, double screenBottom, double barHeight)
+    {
+        double below = regionBottom + 10;
+        if (below + barHeight <= screenBottom - 4) return below;
+        double above = regionTop - barHeight - 10;
+        if (above >= screenTop + 4) return above;
+        return Math.Clamp(regionBottom - barHeight, screenTop + 4,
+            Math.Max(screenTop + 4, screenBottom - 4 - barHeight));
     }
 
     public void SetAutoScroll(bool on)
