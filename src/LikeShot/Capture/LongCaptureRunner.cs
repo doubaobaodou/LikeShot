@@ -68,7 +68,9 @@ public sealed class LongCaptureRunner : IDisposable
         _stitcher = null;
         _stableTicks = 0;
         _frame.UpdateRegion(_region);
+        // 换了方向选区可能换了一台显示器，暗带也换了位置：预览重新挑地方安家。
         _preview.Reset(horizontal);
+        _preview.Attach(_session.Displays, _region);
     }
 
     public void ToggleAutoScroll()
@@ -87,6 +89,17 @@ public sealed class LongCaptureRunner : IDisposable
         var buffer = new byte[stride * _region.Height];
         // CopyPixels(Array pixels, int stride, int offset) —— 第二个参数是步长不是缓冲区大小。
         live.CopyPixels(buffer, stride, 0);
+
+        // 自家的悬浮窗（工具栏、预览）要是压在选区里，GDI 抓屏会把它们一起抓进来：
+        // 工具栏的像素被烤进长图，预览更是每一拍都在变，行哈希全被搅乱，
+        // 拼接器认不出滚动量就整帧整帧往画布上贴——滚到底了还在自己拼就是它。
+        // 所以统一把这些矩形填成恒定纯色：哈希稳了，长图里也只是一块纯色而不是我们的界面。
+        bool occluded = false;
+        foreach (var rect in OccludingRects())
+        {
+            MaskRect(buffer, stride, _region, rect);
+            occluded = true;
+        }
 
         if (_stitcher == null)
         {
@@ -121,10 +134,50 @@ public sealed class LongCaptureRunner : IDisposable
         }
         else
         {
-            _bar.SetStatus($"已拼接 {_stitcher.Height} 像素高");
+            _bar.SetStatus($"已拼接 {_stitcher.Height} 像素高" +
+                           (occluded ? "（自家悬浮窗压在选区里：长图里会留一块纯色）" : ""));
         }
 
         _preview.UpdateStitch(_stitcher, _region);
+    }
+
+    /// <summary>压在选区里的自家悬浮窗（工具栏、预览），换算成物理像素并裁进选区的矩形。</summary>
+    private IEnumerable<Int32Rect> OccludingRects()
+    {
+        double scale = _session.Displays[0].Scale;
+        foreach (var w in new Window[] { _bar, _preview })
+        {
+            if (w == null || !w.IsVisible || w.ActualWidth < 1 || w.ActualHeight < 1) continue;
+            var r = new Int32Rect(
+                (int)Math.Round(w.Left * scale), (int)Math.Round(w.Top * scale),
+                (int)Math.Round(w.ActualWidth * scale), (int)Math.Round(w.ActualHeight * scale));
+            int x1 = Math.Max(r.X, _region.X), y1 = Math.Max(r.Y, _region.Y);
+            int x2 = Math.Min(r.X + r.Width, _region.X + _region.Width);
+            int y2 = Math.Min(r.Y + r.Height, _region.Y + _region.Height);
+            if (x2 > x1 && y2 > y1) yield return new Int32Rect(x1, y1, x2 - x1, y2 - y1);
+        }
+    }
+
+    /// <summary>
+    /// 把帧里 rect ∩ frame 的部分填成恒定纯色（深灰）。帧坐标系 = 区域坐标系，起点在 frame.X/Y。
+    /// internal 供自检直测：矩形内必须变成纯色，矩形外必须一字不动。
+    /// </summary>
+    internal static void MaskRect(byte[] buffer, int stride, Int32Rect frame, Int32Rect rect)
+    {
+        int x1 = Math.Max(rect.X, frame.X), y1 = Math.Max(rect.Y, frame.Y);
+        int x2 = Math.Min(rect.X + rect.Width, frame.X + frame.Width);
+        int y2 = Math.Min(rect.Y + rect.Height, frame.Y + frame.Height);
+        for (int y = y1; y < y2; y++)
+        {
+            int start = (y - frame.Y) * stride + (x1 - frame.X) * 4;
+            for (int x = 0; x < (x2 - x1) * 4; x += 4)
+            {
+                buffer[start + x] = 0x20;
+                buffer[start + x + 1] = 0x20;
+                buffer[start + x + 2] = 0x20;
+                buffer[start + x + 3] = 0xFF;
+            }
+        }
     }
 
     private void ScrollOnce()
@@ -278,6 +331,7 @@ internal sealed class LongPreviewWindow : Window
 {
     private const double ShortDip = 190;    // 预览短边（纵向是宽、横向是高）
     private const double EdgeMargin = 14;   // 离屏幕上/右边缘的距离
+    private const double MinStripDip = 240; // 选区外的暗带至少要这么高才放得下预览，放不下就藏
 
     private readonly Image _image;
     private readonly Border _cursor;
@@ -286,6 +340,9 @@ internal sealed class LongPreviewWindow : Window
     private bool _horizontal;
     private int _capPx;                     // 拼接轴的位图像素上限（≈屏幕能给的 DIP 高度，1px≈1DIP）
     private double _capDip;                 // 拼接轴的显示 DIP 上限
+    private double _topDip;                 // 落在上方暗带时的固定顶边
+    private double _bottomDip;              // 落在下方暗带时的固定底边（长的时候往上长）
+    private bool _bottomAnchored;
     private Display _display = null!;
     private double _lastDisplayLen;
     private int _lastCanvasLen;             // 上一拍铺进位图时的画布长度：没长就整拍跳过
@@ -343,9 +400,33 @@ internal sealed class LongPreviewWindow : Window
         _display = displays.FirstOrDefault(d =>
             d.Contains(region.X + region.Width / 2, region.Y + region.Height / 2)) ?? displays[0];
         double scale = _display.Scale;
-        // 拼接轴上限：这屏的 DIP 尺寸减去上下留白（顶上不顶到边、底下给工具栏和状态句留地方）。
-        double spanDip = (_horizontal ? _display.Bounds.Width : _display.Bounds.Height) / scale;
-        _capDip = Math.Max(360, spanDip - EdgeMargin * 2 - 90);
+        double top = _display.Bounds.Y / scale, height = _display.Bounds.Height / scale;
+        double regionTop = (region.Y - _display.Bounds.Y) / scale;
+        double regionBottom = (region.Bottom() - _display.Bounds.Y) / scale;
+
+        // 预览绝不能压在选区里：GDI 抓屏会把它抓进每一帧，而它自己每一拍都跟着拼接在变，
+        // 行哈希全被搅乱，拼接器认不出滚动量就整帧整帧往画布上贴——「滚到底了还在自己拼」就是这么来的。
+        // 所以在选区外的暗带里安家：顶上那条 → 底下那条 → 都放不下（选区快满整屏）就干脆不显示。
+        double topStrip = regionTop - top;
+        double bottomStrip = top + height - regionBottom;
+        if (topStrip >= MinStripDip)
+        {
+            _topDip = top + 6;
+            _bottomAnchored = false;
+            _capDip = topStrip - 20;
+        }
+        else if (bottomStrip >= MinStripDip)
+        {
+            _bottomDip = top + height - 6;
+            _bottomAnchored = true;
+            _capDip = bottomStrip - 20;
+        }
+        else
+        {
+            Hide();
+            _capDip = 0;
+            return;
+        }
         _capPx = (int)Math.Min(_capDip, 1600);   // 位图 1px≈1DIP 就够看，再大只是白吃内存
         Show();
         var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
@@ -361,7 +442,7 @@ internal sealed class LongPreviewWindow : Window
     /// </summary>
     public void UpdateStitch(LongStitcher? stitcher, Int32Rect region)
     {
-        if (stitcher == null || _display == null) return;
+        if (stitcher == null || _display == null || !IsVisible) return;
         int canvasLen = _horizontal ? stitcher.Width : stitcher.Height;
         int crossLen = _horizontal ? stitcher.Height : stitcher.Width;
         if (canvasLen <= 0 || crossLen <= 0) return;
@@ -435,11 +516,10 @@ internal sealed class LongPreviewWindow : Window
             }
             else _cursor.Visibility = Visibility.Collapsed;
 
-            // 右上角钉死：宽度随内容变化时右缘不动，向左生长。
+            // 右缘钉死、往左生长；纵向位置看安家在哪条暗带：下方暗带顶边固定，上方暗带底边固定往上长。
             double right = (_display.Bounds.X + _display.Bounds.Width) / _display.Scale;
-            double top = _display.Bounds.Y / _display.Scale;
             Left = right - ActualWidth - EdgeMargin;
-            Top = top + EdgeMargin;
+            Top = _bottomAnchored ? _bottomDip - ActualHeight : _topDip;
         }
         catch (Exception ex)
         {

@@ -492,7 +492,25 @@ public static class SelfTest
             int seed = runner.AppendedTotal;
             log.AppendLine($"首帧高度={seed}");
 
-            // 实时预览（0.1.14）：右上角那块要跟着拼接变长，起个初值，滚完再对。
+            // 自拼回归（0.1.15）：页面静止、自动滚动还没开，画布绝不能自己长——
+            // 以前预览窗压在选区里每拍都变，行哈希被搅乱，滚到底了还在整帧整帧地自己拼。
+            int idleBefore = runner.AppendedTotal;
+            await Task.Delay(1500);
+            log.AppendLine($"静止不滚：画布 {idleBefore} → {runner.AppendedTotal} " +
+                           $"{(runner.AppendedTotal == idleBefore ? "（没自己长，对）" : "（自己长了，不对）")}");
+
+            // 遮罩回归（0.1.15）：压在选区里的悬浮窗矩形必须被填成恒定纯色，
+            // 矩形外一字不动——不然自家界面就拼进长图了。
+            {
+                var maskBuf = new byte[100 * 400];
+                for (int i = 0; i < maskBuf.Length; i++) maskBuf[i] = 0x11;
+                LongCaptureRunner.MaskRect(maskBuf, 400, new Int32Rect(0, 0, 100, 100), new Int32Rect(40, 40, 20, 10));
+                bool maskOk = maskBuf[45 * 400 + 45 * 4] == 0x20 && maskBuf[10 * 400 + 10 * 4] == 0x11;
+                log.AppendLine($"悬浮窗遮罩：{(maskOk ? "矩形内变纯色、矩形外原样（对）" : "（不对）")}");
+            }
+
+            // 实时预览：得在选区外的暗带里安家（上方暗带 → 下方暗带 → 都放不下就藏），
+            // 压回选区里就会把行哈希搅乱。
             var preview = runner.PreviewForTest;
             double previewLen0 = preview.DisplayedLengthDip;
 
@@ -516,11 +534,11 @@ public static class SelfTest
             log.AppendLine($"跑了 {ticks + 1} 秒收工");
 
             double previewLen1 = preview.DisplayedLengthDip;
-            log.AppendLine($"实时预览：起始 {previewLen0:0}DIP → 结束 {previewLen1:0}DIP " +
-                           $"{(previewLen1 > previewLen0 ? "（跟着变长了，对）" : "（没变长，不对）")}");
+            log.AppendLine($"实时预览：可见={preview.IsVisible}（上方暗带放不下时应已让位给下方暗带或隐藏） " +
+                           $"长度 {previewLen0:0}→{previewLen1:0}DIP");
             FlushIdle();
             preview.UpdateLayout();
-            if (preview.ActualWidth >= 1 && preview.ActualHeight >= 1)
+            if (preview.IsVisible && preview.ActualWidth >= 1 && preview.ActualHeight >= 1)
             {
                 int pw = (int)Math.Ceiling(preview.ActualWidth), ph = (int)Math.Ceiling(preview.ActualHeight);
                 var rtb = new RenderTargetBitmap(pw, ph, 96, 96, PixelFormats.Pbgra32);
