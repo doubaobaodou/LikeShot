@@ -69,35 +69,45 @@ public sealed class LongCaptureRunner : IDisposable
     /// 窗口（尤其走显卡合成的浏览器）回神更慢——露出来那一拍还可能是它底下的窗口，
     /// 「第一次长截图透出底下窗口」就是这一拍被抓进去了。所以先踢它一下
     /// （强制重绘 + 一条鼠标移动消息），前后各等一拍，才开始拼第一帧。
+    /// 踢之前先抓一张探测帧落盘：如果合成层还有残影（长图里的黑块），能看出
+    /// 它是「一开始就在、踢完就好了」还是「拍到一半才冒出来」。
     /// </summary>
     private async void SettleBeforeFirstFrame()
     {
         var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
         dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
-        await System.Threading.Tasks.Task.Delay(250);
+        await System.Threading.Tasks.Task.Delay(200);
         if (_finished) return;
 
         int cx = _region.X + _region.Width / 2, cy = _region.Y + _region.Height / 2;
         var target = Win32.WindowFromPoint(new Win32.POINT { X = cx, Y = cy });
-        if (target != nint.Zero)
-        {
-            Win32.RedrawWindow(target, nint.Zero, nint.Zero,
-                Win32.RDW_INVALIDATE | Win32.RDW_ERASE | Win32.RDW_ALLCHILDREN | Win32.RDW_FRAME | Win32.RDW_UPDATENOW);
-            Win32.PostMessage(target, Win32.WM_MOUSEMOVE, nint.Zero, Win32.ScreenPointLParam(cx, cy));
-            Log.Write($"长截图首拍前唤醒目标窗口 hwnd={target}");
-        }
+        if (target == nint.Zero) target = nint.Zero;
 
-        await System.Threading.Tasks.Task.Delay(250);
-        if (_finished) return;
+        // 探测帧（踢之前）：合成层这时是什么样，留个底。
+        var (probe, probeStride) = _grabber.Grab(_region);
+        DumpFrameForEvidence(probe, probeStride, "long-pre-kick.png");
+
+        for (int beat = 0; beat < 2; beat++)
+        {
+            if (target != nint.Zero)
+            {
+                Win32.RedrawWindow(target, nint.Zero, nint.Zero,
+                    Win32.RDW_INVALIDATE | Win32.RDW_ERASE | Win32.RDW_ALLCHILDREN | Win32.RDW_FRAME | Win32.RDW_UPDATENOW);
+                Win32.PostMessage(target, Win32.WM_MOUSEMOVE, nint.Zero, Win32.ScreenPointLParam(cx, cy));
+            }
+            await System.Threading.Tasks.Task.Delay(250);
+            if (_finished) return;
+        }
+        Log.Write($"长截图首拍前唤醒目标窗口 hwnd={target}（踢了两轮）");
         _timer.Start();
         Poll();
     }
 
     /// <summary>
-    /// 首帧留证：用户报「长截图截到的是别的窗口」时，先看这个文件——
+    /// 抓屏内容落盘留证：用户报「长图里有黑块/别的窗口」时，先看这几个文件——
     /// 抓屏那一刻选区里到底是什么，一目了然。每次长截图覆盖。
     /// </summary>
-    private void DumpFirstFrameForEvidence(byte[] buffer, int stride)
+    private void DumpFrameForEvidence(byte[] buffer, int stride, string fileName)
     {
         try
         {
@@ -105,13 +115,13 @@ public sealed class LongCaptureRunner : IDisposable
                 _region.Width, _region.Height, 96, 96,
                 System.Windows.Media.PixelFormats.Bgra32, null, buffer, stride);
             bmp.Freeze();
-            string path = System.IO.Path.Combine(App.ConfigDirectory, "long-first-frame.png");
+            string path = System.IO.Path.Combine(App.ConfigDirectory, fileName);
             var error = Exporter.TryWrite(bmp, path);
-            Log.Write(error == null ? $"长截图首帧留证 -> {path}" : $"长截图首帧留证失败：{error}");
+            Log.Write(error == null ? $"长截图抓屏留证 {fileName} -> {path}" : $"长截图抓屏留证失败：{error}");
         }
         catch (Exception ex)
         {
-            Log.Error("长截图首帧留证失败", ex);
+            Log.Error("长截图抓屏留证失败", ex);
         }
     }
 
@@ -165,7 +175,7 @@ public sealed class LongCaptureRunner : IDisposable
         if (_stitcher == null)
         {
             _stitcher = new LongStitcher(_region, buffer, stride, reserved);
-            DumpFirstFrameForEvidence(buffer, stride);
+            DumpFrameForEvidence(buffer, stride, "long-first-frame.png");
         }
         else
         {
