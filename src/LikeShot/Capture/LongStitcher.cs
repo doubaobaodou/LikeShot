@@ -66,6 +66,9 @@ public sealed class LongStitcher
     public int Stride => _stride;
     public bool IsFull => _height >= MaxHeight;
 
+    /// <summary>帧底整段预留掉的行数（自家工具栏/预览压在选区底边）；0 表示没预留。</summary>
+    public int ReservedFooter => _footer;
+
     /// <summary>每帧的判定过程，排查「重复行」时靠这个而不是靠猜。</summary>
     public string Diag => _diag.ToString();
 
@@ -116,6 +119,35 @@ public sealed class LongStitcher
 
         _previous = hashes;
         Note(step, votes, present, top, bottom, appended);
+        return appended;
+    }
+
+    /// <summary>
+    /// 收尾补拍：工具栏/预览藏起来之后补的那一帧，把之前整段预留掉的底栏接回来。
+    /// 没有预留过底栏就是空操作——那种情况这一条本来就一路拍到了。
+    /// </summary>
+    public int AppendTail(byte[] frame, int frameStride, int frameHeight)
+    {
+        if (frameStride != _stride || _footer <= 0 || IsFull) return 0;
+
+        // 补拍这一刻页面可能又挪了几行：先在「上一帧没被掩住的那一段」上投一次票校正落点，
+        // 票不够就沿用上一帧的落点（页面没动就是它）。
+        long[] hashes = RowHashes(frame, frameStride, frameHeight);
+        int offset = DetectOffset(hashes, 0, Math.Max(0, frameHeight - _footer), out int votes, out int present);
+        if (offset > _offset) _offset = offset;
+
+        // 落点对不上就一行都不接：硬接只会把已经拼过的重叠区再贴一遍，那正是长图内容翻倍的来源。
+        int fromRow = _height - _offset;
+        if (fromRow < 0 || fromRow >= frameHeight)
+        {
+            _diag.AppendLine(fromRow < 0
+                ? $"收尾补拍：画布落后于落点（画布={_height} 落点={_offset} 帧高={frameHeight}），一行没接"
+                : $"收尾补拍：画布已经盖到这一帧末尾（画布={_height} 落点={_offset} 帧高={frameHeight}），不用接");
+            return 0;
+        }
+
+        int appended = AppendRows(frame, frameStride, fromRow, frameHeight);
+        _diag.AppendLine($"收尾补拍：底栏={_footer} 落点={_offset} 票数={votes} 认出行数={present} 追加={appended} 画布={_height}");
         return appended;
     }
 

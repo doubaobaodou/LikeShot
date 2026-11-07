@@ -612,9 +612,10 @@ public static class SelfTest
             var session = controller.SessionForTest!;
             var d = Display.All().First(x => x.IsPrimary);
 
-            // 选区底部要留出工具栏的位置：工具栏放不下时会翻到选区上沿，
-            // 那就等于把自己的按钮拍进每一帧里，拼接必然认不出滚动量。
-            var box = new Int32Rect(d.Bounds.X + 30, d.Bounds.Y + 30, d.Bounds.Width - 60, d.Bounds.Height - 340);
+            // 故意框满整屏：这才是最常见的框法（照着窗口拉满），也是工具栏和预览都只能
+            // 压进选区底边、底边那一段被整段预留的情况——「滚到底了长图还是少最后一条」
+            // 就出在这儿。给工具栏留出位置的那种选区正好绕开这条路径，测不到它。
+            var box = new Int32Rect(d.Bounds.X, d.Bounds.Y, d.Bounds.Width, d.Bounds.Height);
 
             int x0 = box.X, y0 = box.Y, x1 = box.X + box.Width, y1 = box.Y + box.Height;
 
@@ -736,6 +737,29 @@ public static class SelfTest
                 log.AppendLine($"预留底栏：画布 {h1}→{h2}→{h3} 内容对位={(rowsOk ? "对" : "错")}");
                 Expect("压在选区底边的自家工具栏那几行一帧都不进画布", h1 == 150 && h2 == 190 && h3 == 230);
                 Expect("预留掉底栏之后内容还对得上位", rowsOk);
+
+                // 收尾补拍回归（0.1.24）：滚到底之后，被整段预留掉的那一截要能靠补一帧干净的接回来。
+                // 「框到底、也滚到底，长图还是少最后一条」就是这几行从头到尾没进画布。
+                static byte[] Gray(int fw, int v)
+                {
+                    var r = new byte[fw * 4];
+                    for (int x = 0; x < fw; x++) { r[x * 4] = (byte)v; r[x * 4 + 1] = (byte)v; r[x * 4 + 2] = (byte)v; r[x * 4 + 3] = 0xFF; }
+                    return r;
+                }
+                int tail = s.AppendTail(Frame(80, pageH, fw, fh, 0), stride, fh);
+                var canvas = s.CanvasRowHashes();
+                bool tailOk = canvas.Length == 280
+                              && canvas[230] == LongStitcher.HashRow(Gray(fw, 231), 0, stride)
+                              && canvas[279] == LongStitcher.HashRow(Gray(fw, 280), 0, stride);
+                int again = s.AppendTail(Frame(80, pageH, fw, fh, 0), stride, fh);
+                log.AppendLine($"收尾补拍：画布 {h3}→{s.Height}（接回 {tail} 行）内容对位={(tailOk ? "对" : "错")} 再补一次接回={again}");
+                Expect("收尾补拍要把预留掉的那一截接回来，内容还得对得上位", tail == resv && tailOk);
+                ExpectSame("同一帧补第二次不该再长（再长就是重叠区重复贴）", again, 0);
+
+                var open = new LongStitcher(new Int32Rect(0, 0, fw, fh), Frame(0, pageH, fw, fh, 0), stride, 0);
+                int noReserve = open.AppendTail(Frame(0, pageH, fw, fh, 0), stride, fh);
+                log.AppendLine($"底边没被压住时收尾补拍：接回 {noReserve} 行");
+                ExpectSame("底边没被自家悬浮窗压住时，收尾补拍是空操作", noReserve, 0);
             }
 
             // 实时预览：得在选区外的暗带里安家（上方暗带 → 下方暗带 → 都放不下就藏），
@@ -779,6 +803,24 @@ public static class SelfTest
                 log.AppendLine($"预览取证={pw}x{ph} -> {previewPath}");
             }
 
+            // 收尾补拍（0.1.24）：满屏选区时工具栏和预览都压在选区底边，那一段被整段预留，
+            // 滚动途中内容会升上来被拼到，可页面一滚到底，被压住的那一截就再也拍不着。
+            // 先量一眼「没补拍时确实少了」——不然下面那条绿底断言可能是白给的——再补拍。
+            int reservedRows = runner.ReservedFooterForTest;
+            log.AppendLine($"选区底边被自家悬浮窗压住 {reservedRows} 行");
+            Expect("满屏选区时工具栏/预览必然压进选区底边（0 就是这条回归根本没走到）", reservedRows > 0);
+
+            var shortImage = runner.BuildResult();
+            if (shortImage != null)
+            {
+                var before = LastRowColor(shortImage);
+                log.AppendLine($"补拍前：高={shortImage.PixelHeight} 末行=RGB({before.r},{before.g},{before.b})");
+                Expect($"补拍之前长图末尾不该是页面最底下那条绿（实得 RGB({before.r},{before.g},{before.b})）——" +
+                       "是绿的就说明底边根本没被压住，这条回归测不到东西", !IsFootGreen(before));
+            }
+
+            await runner.CaptureTailAsync();
+
             var image = runner.BuildResult();
             if (image != null)
             {
@@ -788,20 +830,28 @@ public static class SelfTest
                     : $"成品={image.PixelWidth}x{image.PixelHeight} bytes={new FileInfo(path).Length} -> {path}");
                 Expect("长图写得下盘", longWriteError == null);
 
-                // 页面自己知道它能滚多远：拼出来的高度对不上这个数，就是重复贴（超了）
-                // 或者漏贴（不到）。以前只报「滚没滚」，看不出这两件事。
+                var after = LastRowColor(image);
+                log.AppendLine($"补拍后：高={image.PixelHeight}（补拍前 {shortImage?.PixelHeight}） 末行=RGB({after.r},{after.g},{after.b})");
+                Expect($"收尾补拍之后长图末尾要是页面最底下那条绿（实得 RGB({after.r},{after.g},{after.b})），" +
+                       "不是就是滚到底了还少最后一条", IsFootGreen(after));
+
+                // 页面自己知道自己有多高：可滚总高 + 固定表头 + 固定底栏。
+                // 选区框满整屏时，拼出来的长图就该一行不多一行不少地等于这个数。
+                // 以前拿「可滚总高」当尺子，少算了表头和底栏那 100 DIP，尺子本身短了 175px，
+                // 判定又松到 ±1394px，于是这个系统性偏差一直被盖着——不重不漏根本没量到。
                 var (extent, viewport) = page.ScrollExtents();
                 double scale = Display.All().First(d => d.IsPrimary).Scale;
-                int expected = (int)Math.Round(extent * scale);
+                int expected = (int)Math.Round((extent + LongPageWindow.HeadDip + LongPageWindow.FootDip) * scale);
                 int got = image.PixelHeight;
                 int off = got - expected;
-                bool fits = Math.Abs(off) <= Math.Max(200, expected / 10);
+                bool fits = Math.Abs(off) <= 8;
                 int lines = runner.StitchDiag.Split('\n').Length;
                 int zeroVotes = runner.StitchDiag.Split('\n').Count(l => l.Contains("票=0"));
-                log.AppendLine($"应得高度={expected}px（页面可滚总高，视口 {viewport:0} DIP） 实拼={got}px 差={off} " +
+                log.AppendLine($"应得高度={expected}px（可滚总高 {extent:0} + 表头 {LongPageWindow.HeadDip:0} + 底栏 " +
+                               $"{LongPageWindow.FootDip:0} DIP，×{scale:0.##}；视口 {viewport:0} DIP） 实拼={got}px 差={off} " +
                                $"判定={(fits ? "对得上" : "对不上")}");
                 log.AppendLine($"认不出重叠量、只能整帧追加的帧数={zeroVotes}/{lines}");
-                Expect($"拼出来的高度对得上页面自己的可滚总高（差 {off}px，超了是重复贴、少了是漏贴）", fits);
+                Expect($"拼出来的高度要和页面自己的总高逐行对得上（差 {off}px，正数是重复贴、负数是漏贴）", fits);
                 ExpectSame("每一帧都认得出重叠量，没有只能整帧追加的", zeroVotes, 0);
 
                 // 成品像素回归（0.1.23）：黑块、成片纯色、开头透出底下别的窗口——
@@ -875,6 +925,18 @@ public static class SelfTest
         return true;
     }
 
+    /// <summary>成品最后一行正中间那个像素的颜色：页面最底下是条绿，滚到底就该量到它。</summary>
+    private static (int r, int g, int b) LastRowColor(BitmapSource image)
+    {
+        int x = Math.Max(0, image.PixelWidth / 2 - 1);
+        var px = new byte[4];
+        image.CopyPixels(new Int32Rect(x, image.PixelHeight - 1, 1, 1), px, 4, 0);
+        return (px[2], px[1], px[0]);
+    }
+
+    private static bool IsFootGreen((int r, int g, int b) c) =>
+        Math.Abs(c.r - 30) <= 16 && Math.Abs(c.g - 200) <= 16 && Math.Abs(c.b - 30) <= 16;
+
     /// <summary>
     /// 自检用的可滚动页面：250 条唯一颜色的色带 + 固定表头/底栏。
     /// 颜色按 LineColor(i) 编码，拼完逐行认色就能算出重贴/漏贴。
@@ -882,6 +944,8 @@ public static class SelfTest
     internal sealed class LongPageWindow : Window
     {
         public const int LineCount = 250;
+        /// <summary>固定表头/底栏的 DIP 高：核对长图总高时要把这两条算进去，它们不跟着滚。</summary>
+        public const double HeadDip = 60, FootDip = 40;
         private readonly ScrollViewer _scroll = new();
 
         public LongPageWindow()
@@ -909,8 +973,8 @@ public static class SelfTest
                     Background = new LinearGradientBrush(TopColor(i), BottomColor(i), 90),
                 });
 
-            var head = new Border { Height = 60, Background = new SolidColorBrush(Color.FromRgb(200, 30, 30)) };
-            var foot = new Border { Height = 40, Background = new SolidColorBrush(Color.FromRgb(30, 200, 30)) };
+            var head = new Border { Height = HeadDip, Background = new SolidColorBrush(Color.FromRgb(200, 30, 30)) };
+            var foot = new Border { Height = FootDip, Background = new SolidColorBrush(Color.FromRgb(30, 200, 30)) };
             var dock = new DockPanel { Background = Brushes.White };
             DockPanel.SetDock(head, Dock.Top);
             DockPanel.SetDock(foot, Dock.Bottom);

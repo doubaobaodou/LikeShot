@@ -30,6 +30,7 @@ public sealed class LongCaptureRunner : IDisposable
     private bool _autoScroll;
     private int _stableTicks;
     private bool _finished;
+    private bool _closed;       // 窗口已经关掉：补拍的收尾不能再把它们 Show 回来
 
     public LongCaptureRunner(CaptureSession session, Action exitCapture)
     {
@@ -50,6 +51,9 @@ public sealed class LongCaptureRunner : IDisposable
     public int AppendedTotal => _stitcher?.Height ?? 0;
     public string StitchDiag => _stitcher?.Diag ?? "";
     internal LongPreviewWindow PreviewForTest => _preview;
+
+    /// <summary>选区底边被自家悬浮窗压住、整段预留掉的行数；0 表示工具栏和预览都在选区外。</summary>
+    internal int ReservedFooterForTest => _stitcher?.ReservedFooter ?? 0;
 
     public void Start()
     {
@@ -286,11 +290,83 @@ public sealed class LongCaptureRunner : IDisposable
         else
         {
             _bar.SetStatus($"已拼接 {_stitcher.Height} 像素高" +
-                           (reserved > 0 ? "（工具栏/预览压在选区底边：这一条不会拼进长图）"
+                           (reserved > 0 ? "（工具栏/预览压在选区底边：收尾时会补拍这一条）"
                            : occluded ? "（自家悬浮窗压在选区里：长图里会留一块纯色）" : ""));
         }
 
         _preview.UpdateStitch(_stitcher, _region);
+    }
+
+    /// <summary>
+    /// 收尾补拍：工具栏/预览压在选区底边时，那几行从第一帧起整段预留、永远不进画布。
+    /// 滚动途中下面的内容会升上来被拼到，可页面一滚到底，被压住的那一截就再也拍不着——
+    /// 「框到底、也滚到底，长图还是少最后一条」就是它。所以收尾时把自家悬浮窗藏起来，
+    /// 等合成翻篇、把被盖住的页面踢一下重绘，补一帧干净的接上。
+    /// 没预留过底栏就整个跳过：那种情况本来就一路拍到了，工具栏也不必闪一下。
+    /// </summary>
+    internal async System.Threading.Tasks.Task CaptureTailAsync()
+    {
+        if (_stitcher == null || _stitcher.ReservedFooter <= 0) return;
+
+        int reserved = _stitcher.ReservedFooter;
+        _timer.Stop();
+        bool barWas = _bar.IsVisible, previewWas = _preview.IsVisible;
+        _bar.Hide();
+        _preview.Hide();
+        try
+        {
+            await System.Threading.Tasks.Task.Delay(300);
+            if (!KickCoveredPage(reserved))
+            {
+                Log.Write("长截图收尾补拍放弃：藏掉工具栏之后那一块仍被自家窗口压着，接上去就是把按钮烤进长图");
+                return;
+            }
+            await System.Threading.Tasks.Task.Delay(220);
+
+            var (buffer, stride) = _grabber.Grab(_region);
+            DumpFrameForEvidence(buffer, stride, "tail-frame.png");
+            int before = _stitcher.Height;
+            int appended = _stitcher.AppendTail(buffer, stride, _region.Height);
+            Log.Write(appended > 0
+                ? $"长截图收尾补拍：底栏 {reserved} 行接回 {appended} 行（画布 {before} → {_stitcher.Height}）"
+                : $"长截图收尾补拍：这一帧没有落在画布外的行（底栏 {reserved} 行，画布 {before}）——原因见拼接判定末尾");
+        }
+        catch (Exception ex)
+        {
+            Log.Error("长截图收尾补拍失败", ex);
+        }
+        finally
+        {
+            // 收尾没成（复制失败、存盘点了取消）还要接着拼，工具栏和预览得原地回来。
+            // 成了的话调用方紧接着 Close()，中间不让出线程，看不见这一下。
+            if (!_closed)
+            {
+                if (barWas) _bar.Show();
+                if (previewWas) _preview.Show();
+            }
+        }
+    }
+
+    /// <summary>
+    /// 把刚被自家悬浮窗盖住的那块页面踢一下重绘（藏窗之后合成器不一定马上翻篇），
+    /// 并确认那块真的露出来了：还压着自家工具栏/预览就报 false，这一帧不能接。
+    /// </summary>
+    private bool KickCoveredPage(int reservedRows)
+    {
+        int cx = _region.X + _region.Width / 2;
+        int cy = _region.Y + _region.Height - Math.Max(1, reservedRows / 2);
+        var target = Win32.WindowFromPoint(new Win32.POINT { X = cx, Y = cy });
+        if (target == nint.Zero) return true;   // 认不出是谁，但不是自家悬浮窗挡着
+
+        var root = Win32.GetAncestor(target, Win32.GA_ROOTOWNER);
+        var bar = new System.Windows.Interop.WindowInteropHelper(_bar).Handle;
+        var preview = new System.Windows.Interop.WindowInteropHelper(_preview).Handle;
+        if (root == bar || root == preview) return false;
+
+        Win32.RedrawWindow(target, nint.Zero, nint.Zero,
+            Win32.RDW_INVALIDATE | Win32.RDW_ERASE | Win32.RDW_ALLCHILDREN | Win32.RDW_FRAME | Win32.RDW_UPDATENOW);
+        Win32.PostMessage(target, Win32.WM_MOUSEMOVE, nint.Zero, Win32.ScreenPointLParam(cx, cy));
+        return true;
     }
 
     /// <summary>压在选区里的自家悬浮窗（工具栏、预览），换算成物理像素并裁进选区的矩形。</summary>
@@ -387,11 +463,36 @@ public sealed class LongCaptureRunner : IDisposable
         });
     }
 
-    public void FinishToClipboard()
+    private bool _finishing;
+
+    /// <summary>
+    /// 收尾第一步：补拍最后一帧，期间不再按节奏抓帧。
+    /// 已经在收尾途中（补拍要几百毫秒）就把后到的点击吃掉，免得同一趟收两次。
+    /// </summary>
+    private async System.Threading.Tasks.Task<bool> BeginFinishAsync()
     {
+        if (_finishing) return false;
+        _finishing = true;
+        _finished = true;
+        await CaptureTailAsync();
+        return true;
+    }
+
+    /// <summary>这一趟没收成（复制失败、存盘点了取消）：退回接着拼的状态。</summary>
+    private void AbortFinish()
+    {
+        _finished = false;
+        _finishing = false;
+        _timer.Start();
+    }
+
+    public async void FinishToClipboard()
+    {
+        if (!await BeginFinishAsync()) return;
         var image = BuildResult();
         if (image == null)
         {
+            AbortFinish();
             _bar.ShowResult("还没抓到任何一帧：先滚一段页面，再点完成", true);
             return;
         }
@@ -400,19 +501,22 @@ public sealed class LongCaptureRunner : IDisposable
         if (error != null)
         {
             // 复制没成就不收摊：拼接结果还在，重试和保存都点得到。
+            AbortFinish();
             _bar.ShowResult($"复制到剪贴板失败：{error}", true, "重试复制", FinishToClipboard);
             return;
         }
-        _finished = true;
+        _finishing = false;
         Close();
         _exitCapture();
     }
 
-    public void FinishToFile()
+    public async void FinishToFile()
     {
+        if (!await BeginFinishAsync()) return;
         var image = BuildResult();
         if (image == null)
         {
+            AbortFinish();
             _bar.ShowResult("还没抓到任何一帧：先滚一段页面，再点保存", true);
             return;
         }
@@ -421,11 +525,12 @@ public sealed class LongCaptureRunner : IDisposable
         var path = Exporter.SaveDialog(image, App.Config, out var writeError);
         if (writeError != null)
         {
+            AbortFinish();
             _bar.ShowResult($"保存失败：{writeError}", true, "换个位置再存", FinishToFile);
             return;
         }
-        if (path == null) return;   // 点了取消，长截图照旧接着拼
-        _finished = true;
+        if (path == null) { AbortFinish(); return; }   // 点了取消，长截图照旧接着拼
+        _finishing = false;
         Close();
         _exitCapture();
         if (App.Config.CopyAfterSave)
@@ -439,11 +544,12 @@ public sealed class LongCaptureRunner : IDisposable
     private static void Record(BitmapSource image) =>
         HistoryStore.Shared.AddLater(image, HistoryStore.SourceLong);
 
-    public void Edit()
+    public async void Edit()
     {
+        if (!await BeginFinishAsync()) return;
         var image = BuildResult();
         if (image == null) { Cancel(); return; }
-        _finished = true;
+        _finishing = false;
         Close();
         _exitCapture();
         _session.Controller?.Pin(image, new Int32Rect(_region.X, _region.Y, image.PixelWidth, image.PixelHeight));
@@ -459,6 +565,7 @@ public sealed class LongCaptureRunner : IDisposable
     public void Close()
     {
         _finished = true;
+        _closed = true;
         _timer.Stop();
         _bar.Close();
         _frame.Close();
@@ -469,6 +576,7 @@ public sealed class LongCaptureRunner : IDisposable
     public void Dispose()
     {
         _finished = true;
+        _closed = true;
         _timer.Stop();
         _frame.Close();
         _bar.Close();
