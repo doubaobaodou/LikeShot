@@ -31,6 +31,7 @@ public sealed class LongCaptureRunner : IDisposable
     private int _stableTicks;
     private bool _finished;
     private bool _closed;       // 窗口已经关掉：补拍的收尾不能再把它们 Show 回来
+    private string _clipNote = "";   // 选区裁进滚动窗口之后，状态栏要一直带着这句解释
 
     public LongCaptureRunner(CaptureSession session, Action exitCapture)
     {
@@ -54,6 +55,9 @@ public sealed class LongCaptureRunner : IDisposable
 
     /// <summary>选区底边被自家悬浮窗压住、整段预留掉的行数；0 表示工具栏和预览都在选区外。</summary>
     internal int ReservedFooterForTest => _stitcher?.ReservedFooter ?? 0;
+
+    /// <summary>自检用：此刻真正在拼的选区（首拍前可能已裁进滚动窗口）。</summary>
+    internal Int32Rect RegionForTest => _region;
 
     public void Start()
     {
@@ -85,8 +89,12 @@ public sealed class LongCaptureRunner : IDisposable
 
         int cx = _region.X + _region.Width / 2, cy = _region.Y + _region.Height / 2;
         var target = Win32.WindowFromPoint(new Win32.POINT { X = cx, Y = cy });
-        if (target == nint.Zero) target = nint.Zero;
         Log.Write($"长截图首拍前目标窗口 {DescribeWindow(target)}");
+
+        // 选区跨了多个窗口时先裁进会滚的那一个，再留证、再踢：后面所有坐标都跟着裁过的选区走。
+        ClipToTargetWindow(target);
+        cx = _region.X + _region.Width / 2;
+        cy = _region.Y + _region.Height / 2;
 
         // 对照取证：截图层当时显示的那张快照的选区裁剪。它和下面几帧逐张比，
         // 就能分清「抓屏抓错了」还是「屏幕那一刻真的不是用户选的页面」。
@@ -112,6 +120,53 @@ public sealed class LongCaptureRunner : IDisposable
         Log.Write($"长截图首拍前唤醒目标窗口 hwnd={target}（踢了两轮）");
         _timer.Start();
         Poll();
+    }
+
+    /// <summary>
+    /// 选区跨了多个窗口时，长截图只拼指针下会滚的那一个：自动滚轮投给选区中心的窗口，
+    /// 选区里其它窗口的像素一动不动，却会被当成「滚出来的新内容」一路接进画布——
+    /// 屏幕上并排摆着两个窗口、选区照着屏幕拉满就是最典型的触发法：长图开头是其中一个，
+    /// 底下接着拼出另一个（「第一次长截图跳到底下的页面」就是它，和首拍残影不是一回事）。
+    /// 所以首拍前把选区裁进中心窗口的可见矩形；裁了多少写日志，状态栏一直带着解释。
+    /// 选区本来就整个落在这一个窗口里时裁不出差别，原样不动。
+    /// </summary>
+    private void ClipToTargetWindow(nint target)
+    {
+        if (target == nint.Zero) return;
+        var root = Win32.GetAncestor(target, Win32.GA_ROOTOWNER);
+        if (root == nint.Zero) return;
+        foreach (var w in new Window[] { _bar, _preview })
+            if (new System.Windows.Interop.WindowInteropHelper(w).Handle == root) return;
+
+        var rect = VisibleRect(root);
+        int x1 = Math.Max(_region.X, rect.Left), y1 = Math.Max(_region.Y, rect.Top);
+        int x2 = Math.Min(_region.X + _region.Width, rect.Right);
+        int y2 = Math.Min(_region.Y + _region.Height, rect.Bottom);
+        var clipped = new Int32Rect(x1, y1, x2 - x1, y2 - y1);
+        if (clipped.Width < 200 || clipped.Height < 200) return;   // 裁完只剩一条：宁可照旧也不把选区裁没
+        if (clipped.X == _region.X && clipped.Y == _region.Y &&
+            clipped.Width == _region.Width && clipped.Height == _region.Height) return;
+
+        Log.Write($"长截图选区裁进滚动窗口 {DescribeWindow(target)}：" +
+                  $"{_region.Width}x{_region.Height}@{_region.X},{_region.Y} → " +
+                  $"{clipped.Width}x{clipped.Height}@{clipped.X},{clipped.Y}");
+        _region = clipped;
+        _clipNote = "（选区已裁进指针下的窗口：只拼它会滚的那一块）";
+        _frame.UpdateRegion(_region);
+        _bar.ShowBar(_session.Displays, _region, _session.UiScale);
+        _preview.Reset(_horizontal);
+        _preview.Attach(_session.Displays, _region);
+    }
+
+    /// <summary>最大化窗口的 GetWindowRect 比可见范围大一圈（藏着_resize 边框），优先问 DWM 要真实边框。</summary>
+    private static Win32.RECT VisibleRect(nint hwnd)
+    {
+        int size = System.Runtime.InteropServices.Marshal.SizeOf<Win32.RECT>();
+        Win32.RECT rect;
+        if (Win32.DwmGetWindowAttribute(hwnd, Win32.DWMWA_EXTENDED_FRAME_BOUNDS, out rect, size) == 0 &&
+            rect.Width > 0 && rect.Height > 0) return rect;
+        Win32.GetWindowRect(hwnd, out rect);
+        return rect;
     }
 
     /// <summary>
@@ -289,9 +344,9 @@ public sealed class LongCaptureRunner : IDisposable
         }
         else
         {
-            _bar.SetStatus($"已拼接 {_stitcher.Height} 像素高" +
-                           (reserved > 0 ? "（工具栏/预览压在选区底边：收尾时会补拍这一条）"
-                           : occluded ? "（自家悬浮窗压在选区里：长图里会留一块纯色）" : ""));
+            string occludeNote = reserved > 0 ? "（工具栏/预览压在选区底边：收尾时会补拍这一条）"
+                               : occluded ? "（自家悬浮窗压在选区里：长图里会留一块纯色）" : "";
+            _bar.SetStatus($"已拼接 {_stitcher.Height} 像素高{occludeNote}{_clipNote}");
         }
 
         _preview.UpdateStitch(_stitcher, _region);

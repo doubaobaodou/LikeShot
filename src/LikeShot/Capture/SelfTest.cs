@@ -602,15 +602,25 @@ public static class SelfTest
         Directory.CreateDirectory(dir);
 
         LongPageWindow? page = null;
+        StaticPaneWindow? pane = null;
+        int paneX = 0;
         try
         {
-            page = new LongPageWindow();
+            var d = Display.All().First(x => x.IsPrimary);
+            paneX = d.Bounds.X + d.Bounds.Width * 3 / 4;
+
+            // 页面窗只占左 3/4，右 1/4 摆一块完全不滚的品红窗：选区照屏幕拉满时
+            // 就跨了两个窗口——不裁进指针下那一个的话，品红这块会被当成「滚出来的
+            // 新内容」一路拼进长图（用户报的「跳到底下的页面」就是这个形状）。
+            page = new LongPageWindow(0.75);
             page.Show();
+            pane = new StaticPaneWindow(
+                new Int32Rect(paneX, d.Bounds.Y, d.Bounds.X + d.Bounds.Width - paneX, d.Bounds.Height), d.Scale);
+            pane.Show();
             await Task.Delay(700); // 等它把 250 条色带画完，否则首帧抓到的是白屏
 
             controller.BeginCapture();
             var session = controller.SessionForTest!;
-            var d = Display.All().First(x => x.IsPrimary);
 
             // 故意框满整屏：这才是最常见的框法（照着窗口拉满），也是工具栏和预览都只能
             // 压进选区底边、底边那一段被整段预留的情况——「滚到底了长图还是少最后一条」
@@ -638,13 +648,21 @@ public static class SelfTest
             residue.Show();
             await Task.Delay(200);
             bool residueCaught;
+            int darkPx = 0, totalPx = 0;
             using (var probe = new ScreenSnapshot.LiveGrabber())
             {
-                var (pb, _) = probe.Grab(new Int32Rect(residueRect.X + 60, residueRect.Y + 60, 8, 8));
-                residueCaught = pb[0] < 24 && pb[1] < 24 && pb[2] < 24;
+                // 整块量占比，不再只点一个 8x8：桌面上 wander 的半透明悬浮窗（桌宠一类）
+                // 挡住探针点时，单点会把「拍到了」误报成「没拍到」，这条回归就空转了。
+                var inner = new Int32Rect(residueRect.X + 20, residueRect.Y + 20,
+                    residueRect.Width - 40, residueRect.Height - 40);
+                var (pb, _) = probe.Grab(inner);
+                totalPx = inner.Width * inner.Height;
+                for (int i = 0; i + 2 < pb.Length; i += 4)
+                    if (pb[i] < 24 && pb[i + 1] < 24 && pb[i + 2] < 24) darkPx++;
+                residueCaught = darkPx * 2 > totalPx;
             }
             log.AppendLine($"假残影窗 {residueRect.Width}x{residueRect.Height}@{residueRect.X},{residueRect.Y}：" +
-                           $"实时抓屏里{(residueCaught ? "是黑的（拍到了）" : "没拍到，这条回归等于空转")}");
+                           $"实时抓屏里{(residueCaught ? "是黑的（拍到了）" : "没拍到，这条回归等于空转")} 近黑 {darkPx}/{totalPx}");
             Expect("假残影窗得真被拍进实时帧，不然下面那条「开头不许有黑块」等于没测", residueCaught);
 
             // 首拍前有一段安顿期（等合成翻篇 + 踢醒目标窗口两轮 + 抓屏落盘留证）。
@@ -660,6 +678,14 @@ public static class SelfTest
             Expect("首拍就得有内容进画布（0 就是首帧抓到空画布）", seed > 0);
             Expect($"首拍要在 3 秒内落地（实得 {firstFrameWatch.ElapsedMilliseconds}ms，超了就是安顿期堆太多活）",
                 seed > 0 && firstFrameWatch.ElapsedMilliseconds < 3000);
+
+            // 跨窗口选区回归（0.1.25）：满屏框横跨页面窗和品红窗，首拍前选区必须
+            // 裁进指针下的页面窗——不裁的话右边那块品红会被当成「滚出来的新内容」
+            // 一路拼进长图，成品右缘整列都是它。
+            var region = runner.RegionForTest;
+            log.AppendLine($"跨窗口选区：满屏框 {box.Width}x{box.Height} → 选区 {region.Width}x{region.Height}@{region.X},{region.Y}（静态窗左缘 {paneX}）");
+            Expect($"选区跨两个窗口时要裁进指针下那一个（选区右缘 {region.X + region.Width}，静态窗左缘 {paneX}）",
+                region.Width < box.Width - 200 && Math.Abs(region.X + region.Width - paneX) <= 4);
 
             // 自拼回归（0.1.15）：页面静止、自动滚动还没开，画布绝不能自己长——
             // 以前预览窗压在选区里每拍都变，行哈希被搅乱，滚到底了还在整帧整帧地自己拼。
@@ -890,6 +916,16 @@ public static class SelfTest
                     if (corner[i] < 24 && corner[i + 1] < 24 && corner[i + 2] < 24) dark++;
                 log.AppendLine($"成品左上角 {cw}x{ch}：近黑像素 {dark}/{cw * ch} 首像素=RGB({corner[2]},{corner[1]},{corner[0]})");
                 Expect($"长图开头不许有黑方块（覆盖层残影烤进第一屏就是这个形状，近黑 {dark} 个）", dark == 0);
+
+                // 旁边那个不滚的窗口：选区没裁干净的话，它的品红像素会从第一屏起
+                // 一路被当新内容往下拼，成品最右一列最先露出来。
+                var edgeCol = new byte[4 * ih];
+                image.CopyPixels(new Int32Rect(iw - 1, 0, 1, ih), edgeCol, 4, 0);
+                int magenta = 0;
+                for (int i = 0; i < edgeCol.Length; i += 4)
+                    if (edgeCol[i + 2] > 200 && edgeCol[i] > 200 && edgeCol[i + 1] < 60) magenta++;
+                log.AppendLine($"成品最右一列：品红 {magenta}/{ih} 行（旁边静态窗的颜色）");
+                Expect($"选区旁边那个窗口的像素一行都不许进长图（最右一列品红 {magenta} 行）", magenta == 0);
             }
             else
             {
@@ -909,6 +945,7 @@ public static class SelfTest
         finally
         {
             page?.Close();
+            pane?.Close();
         }
 
         string report = Path.Combine(dir, "long-report.txt");
@@ -948,7 +985,7 @@ public static class SelfTest
         public const double HeadDip = 60, FootDip = 40;
         private readonly ScrollViewer _scroll = new();
 
-        public LongPageWindow()
+        public LongPageWindow(double widthFraction = 1.0)
         {
             WindowStyle = WindowStyle.None;
             ResizeMode = ResizeMode.NoResize;
@@ -959,7 +996,7 @@ public static class SelfTest
             Title = "LikeShot 长页测试";
             Left = SystemParameters.VirtualScreenLeft;
             Top = SystemParameters.VirtualScreenTop;
-            Width = SystemParameters.VirtualScreenWidth;
+            Width = SystemParameters.VirtualScreenWidth * widthFraction;
             Height = SystemParameters.VirtualScreenHeight;
 
             var band = new StackPanel();
@@ -1014,6 +1051,28 @@ public static class SelfTest
             ShowActivated = false;
             Topmost = true;
             Background = Brushes.Black;
+            Left = physical.X / scale;
+            Top = physical.Y / scale;
+            Width = physical.Width / scale;
+            Height = physical.Height / scale;
+        }
+    }
+
+    /// <summary>
+    /// 完全不滚的静态窗：整块品红，和页面窗并排各占一段屏幕。
+    /// 选区照屏幕拉满时它就在选区里——长截图不裁进指针下那个窗口的话，
+    /// 这块品红会被当成「滚出来的新内容」拼进长图，探针靠品红认它。
+    /// </summary>
+    internal sealed class StaticPaneWindow : Window
+    {
+        public StaticPaneWindow(Int32Rect physical, double scale)
+        {
+            WindowStyle = WindowStyle.None;
+            ResizeMode = ResizeMode.NoResize;
+            ShowInTaskbar = false;
+            ShowActivated = false;
+            Topmost = true;
+            Background = new SolidColorBrush(Color.FromRgb(255, 0, 255));
             Left = physical.X / scale;
             Top = physical.Y / scale;
             Width = physical.Width / scale;
