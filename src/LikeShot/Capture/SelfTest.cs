@@ -1061,6 +1061,28 @@ public static class SelfTest
                 if (dThird) controller.Abort();
                 await Task.Delay(400);
 
+                // E) 让位应答回归（0.1.15）：QQ 的截图层那种「不抢前台」的工具窗弹出来，
+                //    以前只盯前台切换的观察器永远等不到，攒两下就把我们的截图层压到 QQ 上面——
+                //    「QQ 截完图之后我们的也冒出来了」就是它。现在窗口显形（OBJECT_SHOW）也算回应。
+                //    让位名单指向我们自己，测试窗才能被观察器看见；这个窗 Show 时不激活、不抢前台。
+                arbiter.SetYieldNames(["LikeShot"]);
+                await Task.Delay(500);
+                PressChord();
+                await Task.Delay(250);
+                var ghost = new Window
+                {
+                    Width = 140, Height = 90,
+                    ShowActivated = false, ShowInTaskbar = false, WindowStyle = WindowStyle.None,
+                    Content = new System.Windows.Controls.TextBlock { Text = "e" }
+                };
+                ghost.Show();
+                await Task.Delay(250);   // OBJECT_SHOW 走消息泵异步送达，得泵一拍才算数
+                bool heardEarly = arbiter.ObserverForTest?.Responded ?? false;
+                await Task.Delay(1400);  // 等观察器的 900ms 判定跑完
+                log.AppendLine($"E 不抢前台的窗口也算回应={heardEarly}（应为 True） 判定={arbiter.YieldDiagForTest}（连按未见响应应为 0）");
+                ghost.Close();
+                await Task.Delay(400);
+
                 // C) 让位名单清空、键位换回 Ctrl+Alt+A：QQ 真的注册着它，试探必须判「被占用」。
                 //    这条只验状态，不再按键——按了就等于替用户唤起 QQ 的截图界面。
                 config.CaptureChord = realChord;
@@ -1185,6 +1207,16 @@ public static class SelfTest
             if (backup != null) File.WriteAllBytes(configPath, backup);
             if (Application.Current is App app) app.ReloadHotkey();
             log.AppendLine($"已退回：热键={App.Config.CaptureChord} 格式={App.Config.SaveFormat}");
+
+            // 内存收摊回归（0.1.15）：设置窗关掉必须自动压堆还工作集，不能涨上去就不下来。
+            // 走真实的 OpenSettings 入口——直 new 的窗口没挂 Close 里的收摊逻辑，测了个寂寞。
+            int settlesBefore = CaptureController.SettlesForTest;
+            App.OpenSettings();
+            FlushIdle();
+            foreach (var w in Application.Current.Windows.OfType<LikeShot.UI.SettingsWindow>().ToArray()) w.Close();
+            FlushIdle();
+            log.AppendLine($"设置窗收摊：{(CaptureController.SettlesForTest > settlesBefore ? "关窗即收（对）" : "没收（不对）")}");
+
         }
 
         File.WriteAllText(Path.Combine(dir, "settings-report.txt"), log.ToString());

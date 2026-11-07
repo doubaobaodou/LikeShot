@@ -123,10 +123,24 @@ public sealed class CaptureController
     /// Abort 里那次收拾接不到最后一批垃圾：历史入库排在空闲优先级，
     /// PNG 编码、缩略图、剪贴板转位图这些最大块的缓冲都是入库/复制跑起来才分配的。
     /// 所以入库跑完再补一次，每截一张都回到干净的低水位，而不是越截越高。
-    /// 截图层又开着（手快连截）就跳过——截屏进行中压堆只会白卡一下，等 Abort 再收。
     /// </summary>
-    internal static void SettleAfterHistoryWrite()
+    internal static void SettleAfterHistoryWrite() => Settle();
+
+    /// <summary>
+    /// 大块 UI 收摊后也压一次堆：设置页这种一开就是几十 MB 的窗口，关掉之后
+    /// 垃圾 GC 自己会收，但大对象堆不压、工作集不还，任务管理器里的数字就一直挂着。
+    /// 排到 ContextIdle：等窗口真正拆完再收。
+    /// </summary>
+    internal static void ScheduleSettle()
     {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null) { Settle(); return; }
+        dispatcher.InvokeAsync(Settle, System.Windows.Threading.DispatcherPriority.ContextIdle);
+    }
+
+    private static void Settle()
+    {
+        // 截图层还开着（手快连截）就跳过——截屏进行中压堆只会白卡一下，等 Abort 再收。
         if (Application.Current?.Windows.OfType<CaptureOverlay>().Any() == true) return;
         TrimWorkingSet();
         SettlesForTest++;

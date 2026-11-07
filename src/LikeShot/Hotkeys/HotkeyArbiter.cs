@@ -297,10 +297,13 @@ internal sealed class HotkeyArbiter : IDisposable
     private void ObserveYieldReply()
     {
         if (_observer != null || _yieldPids.Length == 0) return;
-        _observer = new ForegroundObserver(_yieldPids);
+        _observer = new ForegroundObserver(_yieldPids, _yieldNames);
         _watchdog ??= BuildWatchdog();
         _watchdog.Start();
     }
+
+    /// <summary>自检用：让位应答观察器此刻在不在听、听没听到。</summary>
+    internal ForegroundObserver? ObserverForTest => _observer;
 
     private DispatcherTimer BuildWatchdog()
     {
@@ -336,20 +339,31 @@ internal sealed class HotkeyArbiter : IDisposable
         return timer;
     }
 
-    /// <summary>盯住「这几个进程里有没有窗口抢到前台」。</summary>
-    private sealed class ForegroundObserver : IDisposable
+    /// <summary>
+    /// 盯住「这几个进程里有没有窗口冒出来」。两只耳朵：
+    /// 前台切换（普通窗口激活）+ 窗口显形（EVENT_OBJECT_SHOW）。
+    /// 只盯前台是不够的——QQ 的截图层那种工具窗弹出来从来不把自己变成前台窗口，
+    /// 等不到前台事件就会把它误判成「没接键」，攒两下我们的截图层就压到 QQ 上面去了。
+    /// </summary>
+    internal sealed class ForegroundObserver : IDisposable
     {
         private readonly Win32.WinEventProc _proc;
         private readonly uint[] _pids;
-        private nint _hook;
+        private readonly string[] _names;
+        private readonly Dictionary<uint, bool> _nameMatch = new();
+        private nint _hookForeground;
+        private nint _hookShow;
         private int _responded;
 
-        public ForegroundObserver(uint[] pids)
+        public ForegroundObserver(uint[] pids, string[] names)
         {
             _pids = pids;
+            _names = names;
             _proc = OnEvent;
             // 回调要打在装有消息泵的线程上，所以这个钩子只允许从 UI 线程安装（Filter 就在那儿跑）。
-            _hook = Win32.SetWinEventHook(Win32.EVENT_SYSTEM_FOREGROUND, Win32.EVENT_SYSTEM_FOREGROUND,
+            _hookForeground = Win32.SetWinEventHook(Win32.EVENT_SYSTEM_FOREGROUND, Win32.EVENT_SYSTEM_FOREGROUND,
+                nint.Zero, _proc, 0, 0, Win32.WINEVENT_OUTOFCONTEXT);
+            _hookShow = Win32.SetWinEventHook(Win32.EVENT_OBJECT_SHOW, Win32.EVENT_OBJECT_SHOW,
                 nint.Zero, _proc, 0, 0, Win32.WINEVENT_OUTOFCONTEXT);
         }
 
@@ -358,15 +372,34 @@ internal sealed class HotkeyArbiter : IDisposable
         private void OnEvent(nint hook, uint eventType, nint hWnd, int idObject, int idChild, uint threadId, uint eventTime)
         {
             Win32.GetWindowThreadProcessId(hWnd, out uint pid);
-            if (System.Array.IndexOf(_pids, pid) >= 0)
+            if (Matches(pid))
                 System.Threading.Interlocked.Exchange(ref _responded, 1);
+        }
+
+        /// <summary>批次里的 pid 直接认；不在的按进程名前缀兜一次（QQ 的截图有时挂在 QQ 开头的子进程名下）。</summary>
+        private bool Matches(uint pid)
+        {
+            if (System.Array.IndexOf(_pids, pid) >= 0) return true;
+            if (_names.Length == 0) return false;
+            if (_nameMatch.TryGetValue(pid, out bool known)) return known;
+            bool match = false;
+            try
+            {
+                string name = Process.GetProcessById((int)pid).ProcessName;
+                foreach (var n in _names)
+                {
+                    if (name.StartsWith(n, StringComparison.OrdinalIgnoreCase)) { match = true; break; }
+                }
+            }
+            catch { /* 进程刚好退了：按不匹配算 */ }
+            _nameMatch[pid] = match;
+            return match;
         }
 
         public void Dispose()
         {
-            if (_hook == nint.Zero) return;
-            Win32.UnhookWinEvent(_hook);
-            _hook = nint.Zero;
+            if (_hookForeground != nint.Zero) { Win32.UnhookWinEvent(_hookForeground); _hookForeground = nint.Zero; }
+            if (_hookShow != nint.Zero) { Win32.UnhookWinEvent(_hookShow); _hookShow = nint.Zero; }
         }
     }
 

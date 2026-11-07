@@ -34,7 +34,12 @@ public partial class App : Application
         if (_settings is null)
         {
             _settings = new UI.SettingsWindow(Config);
-            _settings.Closed += (_, _) => _settings = null;
+            // 一开几十 MB 的窗口，关掉就得把大对象堆压一遍、工作集还回去，不然数字一直挂着。
+            _settings.Closed += (_, _) =>
+            {
+                _settings = null;
+                CaptureController.ScheduleSettle();
+            };
         }
         if (section >= 0) _settings.SelectSection(section);
         if (_settings.WindowState == WindowState.Minimized) _settings.WindowState = WindowState.Normal;
