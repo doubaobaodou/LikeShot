@@ -627,6 +627,25 @@ public static class SelfTest
             controller.BeginLongCaptureForTest();
             var runner = controller.RunnerForTest;
             if (runner == null) throw new InvalidOperationException("长截图没起来");
+
+            // 残影回归（0.1.24）：覆盖层刚藏起来那阵，走显卡合成的窗口（浏览器最典型）
+            // 常常留着一块没重绘的黑，用户看到的就是「长截图一开始左上角有个黑方块，滚一下就没了」。
+            // 这块黑只在实时抓屏里，截图层的快照里没有——所以第一屏必须取自快照。
+            // 这里自己造一块一模一样的：长图开头要是烤进了它，下面那条像素断言就会红。
+            var residueRect = new Int32Rect(box.X + 6, box.Y + 6, 200, 120);
+            var residue = new ResidueWindow(residueRect, d.Scale);
+            residue.Show();
+            await Task.Delay(200);
+            bool residueCaught;
+            using (var probe = new ScreenSnapshot.LiveGrabber())
+            {
+                var (pb, _) = probe.Grab(new Int32Rect(residueRect.X + 60, residueRect.Y + 60, 8, 8));
+                residueCaught = pb[0] < 24 && pb[1] < 24 && pb[2] < 24;
+            }
+            log.AppendLine($"假残影窗 {residueRect.Width}x{residueRect.Height}@{residueRect.X},{residueRect.Y}：" +
+                           $"实时抓屏里{(residueCaught ? "是黑的（拍到了）" : "没拍到，这条回归等于空转")}");
+            Expect("假残影窗得真被拍进实时帧，不然下面那条「开头不许有黑块」等于没测", residueCaught);
+
             // 首拍前有一段安顿期（等合成翻篇 + 踢醒目标窗口两轮 + 抓屏落盘留证）。
             // 掐固定秒数迟早跟着安顿期改动失真——上一版就是等 900ms，结果首帧还没落地，
             // 「首帧高度=0」和「静止不滚画布自己长」两条一起误报。改成等它真出首帧，
@@ -645,8 +664,11 @@ public static class SelfTest
             // 以前预览窗压在选区里每拍都变，行哈希被搅乱，滚到底了还在整帧整帧地自己拼。
             int idleBefore = runner.AppendedTotal;
             await Task.Delay(1500);
-            log.AppendLine($"静止不滚：画布 {idleBefore} → {runner.AppendedTotal}");
+            log.AppendLine($"静止不滚（残影还挂着）：画布 {idleBefore} → {runner.AppendedTotal}");
             ExpectSame("页面不滚时画布不许自己长", runner.AppendedTotal, idleBefore);
+            residue.Hide();
+            residue.Close();
+            await Task.Delay(300);   // 让它重绘完，后面滚起来才是干净页面
 
             // 遮罩回归（0.1.15）：压在选区里的悬浮窗矩形必须被填成恒定纯色，
             // 矩形外一字不动——不然自家界面就拼进长图了。
@@ -807,6 +829,17 @@ public static class SelfTest
                 Expect($"长图里不许出现成片同色行（{longest}px，黑块和自家遮罩残留都是这个形状）", longest <= 200);
                 Expect($"长图开头要是页面的红表头，不是底下别的窗口（第一行 RGB({strip[2]},{strip[1]},{strip[0]})）",
                     ih > 0 && Math.Abs(strip[2] - 200) <= 16 && Math.Abs(strip[1] - 30) <= 16 && Math.Abs(strip[0] - 30) <= 16);
+
+                // 开头那块黑方块（0.1.24）：覆盖层残影被烤进第一屏就是这个形状——
+                // 只在左上角一块，滚一下就没了，可画布第一屏已经定死，长图里永远留着。
+                int cw = Math.Min(160, iw), ch = Math.Min(40, ih);
+                var corner = new byte[cw * 4 * ch];
+                image.CopyPixels(new Int32Rect(0, 0, cw, ch), corner, cw * 4, 0);
+                int dark = 0;
+                for (int i = 0; i < corner.Length; i += 4)
+                    if (corner[i] < 24 && corner[i + 1] < 24 && corner[i + 2] < 24) dark++;
+                log.AppendLine($"成品左上角 {cw}x{ch}：近黑像素 {dark}/{cw * ch} 首像素=RGB({corner[2]},{corner[1]},{corner[0]})");
+                Expect($"长图开头不许有黑方块（覆盖层残影烤进第一屏就是这个形状，近黑 {dark} 个）", dark == 0);
             }
             else
             {
@@ -901,6 +934,27 @@ public static class SelfTest
 
         private static Color BottomColor(int i) =>
             Color.FromRgb((byte)(i * 37 + 92), (byte)(i * 53 + 24), (byte)(i * 71 + 44));
+    }
+
+    /// <summary>
+    /// 假的合成层残影：覆盖层刚藏起来那阵，走显卡合成的窗口留在屏幕上的一块黑。
+    /// 它只出现在实时抓屏里，截图层的快照里没有——长图开头那块黑方块就是这么来的。
+    /// </summary>
+    internal sealed class ResidueWindow : Window
+    {
+        public ResidueWindow(Int32Rect physical, double scale)
+        {
+            WindowStyle = WindowStyle.None;
+            ResizeMode = ResizeMode.NoResize;
+            ShowInTaskbar = false;
+            ShowActivated = false;
+            Topmost = true;
+            Background = Brushes.Black;
+            Left = physical.X / scale;
+            Top = physical.Y / scale;
+            Width = physical.Width / scale;
+            Height = physical.Height / scale;
+        }
     }
 
     /// <summary>

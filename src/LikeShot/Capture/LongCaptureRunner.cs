@@ -199,6 +199,30 @@ public sealed class LongCaptureRunner : IDisposable
         _stableTicks = 0;
     }
 
+    /// <summary>
+    /// 第一屏用截图层留的那张快照，不用首拍的实时帧。
+    /// 覆盖层刚藏起来那阵，走显卡合成的窗口（浏览器最典型）常常还留着一块没重绘的黑——
+    /// 用户看到的就是「长截图一开始左上角有个黑方块，滚一下就没了」。实时帧把它烤进第一屏，
+    /// 之后滚得再干净，长图开头那块黑也永远在。快照是覆盖层出现之前抓的，没有这层残影。
+    /// </summary>
+    private LongStitcher? SeedFromSnapshot(int reserved)
+    {
+        try
+        {
+            // 翻过方向之后选区可能探出快照范围，那时只能退回实时首帧。
+            var clipped = _session.Snapshot.Intersect(_region);
+            if (clipped.Width != _region.Width || clipped.Height != _region.Height) return null;
+            var pixels = _session.Snapshot.CopyRegion(_region);
+            Log.Write($"长截图第一屏取自截图层快照（{_region.Width}x{_region.Height}，底栏预留 {reserved} 行）");
+            return new LongStitcher(_region, pixels, _region.Width * 4, reserved);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("长截图取快照当第一屏失败，退回实时首帧", ex);
+            return null;
+        }
+    }
+
     private void Poll()
     {
         if (_finished) return;
@@ -229,7 +253,7 @@ public sealed class LongCaptureRunner : IDisposable
 
         if (_stitcher == null)
         {
-            _stitcher = new LongStitcher(_region, buffer, stride, reserved);
+            _stitcher = SeedFromSnapshot(reserved) ?? new LongStitcher(_region, buffer, stride, reserved);
             DumpFrameForEvidence(buffer, stride, "first-frame.png");
         }
         else
