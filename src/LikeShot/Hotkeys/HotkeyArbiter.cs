@@ -131,6 +131,17 @@ internal sealed class HotkeyArbiter : IDisposable
             return swallowUp;
         }
 
+        if (!_chord.Matches(packet.Vk, packet.Alt, packet.Control, packet.Shift, packet.Win))
+        {
+            // 单敲 A 不算异常（打字满屏都是 a），只有「像是要按组合键却没按对」才记一笔——「按了没反应」最难查。
+            // 这一判必须排在让位之前：否则让位进程在跑时，任何一次普通 A 键都会被当成
+            // 「按了一次组合键」去观察让位应答，打两个字就攒够两次「它没接」，
+            // 仲裁器当场改判接管并 Trigger()——用户没按组合键，截图层自己弹了出来。
+            if (packet.Alt || packet.Control || packet.Shift || packet.Win)
+                LogFromHook($"热键 {ChordText()} 主键命中但修饰键不符：Ctrl={packet.Control} Alt={packet.Alt} Shift={packet.Shift} Win={packet.Win}");
+            return false;
+        }
+
         if (_yieldAlive && _yieldHandles)
         {
             LogFromHook($"热键 {ChordText()} 让位：{YieldNames()} 在跑，交还给系统");
@@ -149,14 +160,6 @@ internal sealed class HotkeyArbiter : IDisposable
             // 全局热键已经替我们盯着这个键（挂了注册的状态）：钩子不许再吞，
             // 否则系统收不到这个键，WM_HOTKEY 就不会来。钩子看不见提权窗口前的按键，
             // 看得见的时候放它过去正好走注册热键那条路，一次按键只触发一回。
-            return false;
-        }
-
-        if (!_chord.Matches(packet.Vk, packet.Alt, packet.Control, packet.Shift, packet.Win))
-        {
-            // 单敲 F9 不算异常，只有「像是要按组合键却没按对」才记一笔——「按了没反应」最难查。
-            if (packet.Alt || packet.Control || packet.Shift || packet.Win)
-                LogFromHook($"热键 {ChordText()} 主键命中但修饰键不符：Ctrl={packet.Control} Alt={packet.Alt} Shift={packet.Shift} Win={packet.Win}");
             return false;
         }
 
