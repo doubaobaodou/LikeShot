@@ -219,7 +219,14 @@ public sealed class CaptureController
     {
         Log.Write($"钉图 源区={sourceRect.Width}x{sourceRect.Height}@{sourceRect.X},{sourceRect.Y} 图={image.PixelWidth}x{image.PixelHeight}");
         var pin = new PinWindow(image, sourceRect, App.Config);
-        pin.Closed += (_, _) => _pins.Remove(pin);
+        pin.Closed += (_, _) =>
+        {
+            _pins.Remove(pin);
+            // 关掉钉图就收摊：钉着的图连它那份快照拷贝、标注缓冲都是大块内存，
+            // 关掉不收拾，垃圾是收走了但大对象堆不压、工作集不还，数字就一直挂着
+            // （设置窗关掉走的是同一套）。
+            ScheduleSettle();
+        };
         _pins.Add(pin);
         pin.ShowPinned();
     }

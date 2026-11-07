@@ -266,7 +266,12 @@ public static class SelfTest
             log.AppendLine($"完成截图入库：新增={store.Entries.Count - entriesBefore}（应为 1） " +
                            $"最新={(newest?.Source)}{(newest == null ? "" : $" {newest.Width}x{newest.Height}")} " +
                            $"原图读回={(newest != null && store.LoadFull(newest) != null)} 缩略图读回={(newest != null && store.Thumbnail(newest) != null)}");
+            // 关钉图收摊回归（0.1.20）：钉图窗带着整张图 + 一份快照拷贝 + 标注缓冲，
+            // 关掉必须跟着压一次堆、把工作集还回去，不然数字一直挂在钉图时的高度。
+            int settlesBeforePinClose = CaptureController.SettlesForTest;
             log.AppendLine($"关掉这一轮开出来的钉图窗：{ClosePins()} 扇");
+            FlushIdle();
+            log.AppendLine($"钉图收摊：{(CaptureController.SettlesForTest > settlesBeforePinClose ? "关钉图即收（对）" : "没收（不对）")}");
 
             // 7) 再标注入口：把一张图丢回截图层，选区就该正好是那张图。
             controller.Abort();
