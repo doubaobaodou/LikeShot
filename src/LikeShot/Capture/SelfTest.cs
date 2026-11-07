@@ -509,6 +509,17 @@ public static class SelfTest
                 log.AppendLine($"悬浮窗遮罩：{(maskOk ? "矩形内变纯色、矩形外原样（对）" : "（不对）")}");
             }
 
+            // 抓屏复用回归（0.1.17）：连续抓两帧必须是同一块缓冲——
+            // 以前每一拍都新配 GDI 位图 + WriteableBitmap + byte[] 三块 25MB，
+            // 长截图滚一分钟就是几百次这样的大对象分配，内存跟着一路涨。
+            {
+                using var grabber = new ScreenSnapshot.LiveGrabber();
+                var f1 = grabber.Grab(new Int32Rect(d.Bounds.X + 10, d.Bounds.Y + 10, 120, 90));
+                var f2 = grabber.Grab(new Int32Rect(d.Bounds.X + 10, d.Bounds.Y + 10, 120, 90));
+                bool reused = ReferenceEquals(f1.Buffer, f2.Buffer);
+                log.AppendLine($"抓屏复用：连续两帧{(reused ? "同一块缓冲（不再每拍新配，对）" : "（换了缓冲，不对）")}");
+            }
+
             // 实时预览：得在选区外的暗带里安家（上方暗带 → 下方暗带 → 都放不下就藏），
             // 压回选区里就会把行哈希搅乱。
             var preview = runner.PreviewForTest;

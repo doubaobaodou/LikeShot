@@ -162,30 +162,57 @@ public sealed class ScreenSnapshot
     }
 
     /// <summary>
-    /// 重新抓取当前屏幕的一块区域（长截图需要边滚边取实时画面，不能用冻结图）。
+    /// 长截图的实时抓屏器：GDI 位图、Graphics、托管帧缓冲各留一份反复用。
+    /// 以前每一拍都新抓一张 GDI 位图（原生 25MB）+ 一张 WriteableBitmap（托管 25MB）
+    /// + 一块 byte[]（大对象堆 25MB），长截图滚一分钟就是几百次这样的分配，
+    /// 任务管理器里的数字在长截图期间一路爬坡就是这么来的。
+    /// 区域尺寸不变就一直用同一套，换了方向选区尺寸变了才重配。
     /// </summary>
-    public static WriteableBitmap GrabLiveRegion(Int32Rect physicalRect)
+    public sealed class LiveGrabber : IDisposable
     {
-        int w = Math.Max(1, physicalRect.Width);
-        int h = Math.Max(1, physicalRect.Height);
-        var bmp = new System.Drawing.Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-        using var g = System.Drawing.Graphics.FromImage(bmp);
-        IntPtr hdc = g.GetHdc();
-        Win32.BitBltFromScreen(hdc, physicalRect.X, physicalRect.Y, w, h);
-        g.ReleaseHdc(hdc);
+        private System.Drawing.Bitmap? _bitmap;
+        private System.Drawing.Graphics? _graphics;
+        private byte[] _buffer = [];
 
-        var image = new WriteableBitmap(w, h, 96, 96, PixelFormats.Bgra32, null);
-        var data = bmp.LockBits(new System.Drawing.Rectangle(0, 0, w, h),
-            System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-        try
+        /// <summary>抓一帧进缓冲。返回的是缓冲本体和步长，区域尺寸不变时下一拍还是同一块。</summary>
+        public (byte[] Buffer, int Stride) Grab(Int32Rect physicalRect)
         {
-            image.WritePixels(new Int32Rect(0, 0, w, h), data.Scan0, w * h * 4, data.Stride);
+            int w = Math.Max(1, physicalRect.Width);
+            int h = Math.Max(1, physicalRect.Height);
+            if (_bitmap == null || _bitmap.Width != w || _bitmap.Height != h)
+            {
+                _graphics?.Dispose();
+                _bitmap?.Dispose();
+                _bitmap = new System.Drawing.Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                _graphics = System.Drawing.Graphics.FromImage(_bitmap);
+                _buffer = new byte[w * 4 * h];
+            }
+
+            IntPtr hdc = _graphics.GetHdc();
+            Win32.BitBltFromScreen(hdc, physicalRect.X, physicalRect.Y, w, h);
+            _graphics.ReleaseHdc(hdc);
+
+            var data = _bitmap.LockBits(new System.Drawing.Rectangle(0, 0, w, h),
+                System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            try
+            {
+                // 32bpp 的 stride 恒等于 宽×4，GDI 缓冲直接拷进托管帧。
+                // 以前中间还要过一张 WriteableBitmap，那一道连分配带拷贝现在都省了。
+                System.Runtime.InteropServices.Marshal.Copy(data.Scan0, _buffer, 0, w * 4 * h);
+            }
+            finally
+            {
+                _bitmap.UnlockBits(data);
+            }
+            return (_buffer, w * 4);
         }
-        finally
+
+        public void Dispose()
         {
-            bmp.UnlockBits(data);
-            bmp.Dispose();
+            _graphics?.Dispose();
+            _graphics = null;
+            _bitmap?.Dispose();
+            _bitmap = null;
         }
-        return image;
     }
 }

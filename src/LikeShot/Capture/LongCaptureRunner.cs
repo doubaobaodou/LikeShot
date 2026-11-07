@@ -24,6 +24,7 @@ public sealed class LongCaptureRunner : IDisposable
     private readonly DispatcherTimer _timer;
 
     private LongStitcher? _stitcher;
+    private readonly ScreenSnapshot.LiveGrabber _grabber = new();
     private Int32Rect _region;
     private bool _horizontal;
     private bool _autoScroll;
@@ -84,11 +85,9 @@ public sealed class LongCaptureRunner : IDisposable
     {
         if (_finished) return;
 
-        var live = ScreenSnapshot.GrabLiveRegion(_region);
-        int stride = _region.Width * 4;
-        var buffer = new byte[stride * _region.Height];
-        // CopyPixels(Array pixels, int stride, int offset) —— 第二个参数是步长不是缓冲区大小。
-        live.CopyPixels(buffer, stride, 0);
+        // GDI 位图、Graphics、托管帧缓冲都是抓屏器自己留着的：区域尺寸不变就一直复用，
+        // 不再每一拍新配三块 25MB——长截图期间内存爬坡的主源就是原来那个「每拍全换」。
+        var (buffer, stride) = _grabber.Grab(_region);
 
         // 自家的悬浮窗（工具栏、预览）要是压在选区里，GDI 抓屏会把它们一起抓进来：
         // 工具栏的像素被烤进长图，预览更是每一拍都在变，行哈希全被搅乱，
@@ -306,18 +305,22 @@ public sealed class LongCaptureRunner : IDisposable
 
     public void Close()
     {
+        _finished = true;
         _timer.Stop();
         _bar.Close();
         _frame.Close();
         _preview.Close();
+        _grabber.Dispose();
     }
 
     public void Dispose()
     {
+        _finished = true;
         _timer.Stop();
         _frame.Close();
         _bar.Close();
         _preview.Close();
+        _grabber.Dispose();
     }
 }
 
