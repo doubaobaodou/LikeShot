@@ -29,6 +29,7 @@ public sealed class TrayIcon : IDisposable
     private readonly Func<string> _statusProvider;
     private readonly ContextMenu _menu;
     private readonly MenuItem _captureItem, _statusItem, _autostartItem;
+    private bool _disposed;
 
     public TrayIcon(CaptureController controller, AppConfig config, Func<string> statusProvider)
     {
@@ -166,6 +167,9 @@ public sealed class TrayIcon : IDisposable
 
     public void Dispose()
     {
+        // 自检会先把托盘收掉再退，随后 OnExit 还会再收一次，重复调用不能炸。
+        if (_disposed) return;
+        _disposed = true;
         _icon.Visible = false;
         _icon.Dispose();
     }

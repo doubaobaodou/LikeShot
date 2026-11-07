@@ -15,10 +15,15 @@
 
 按改动内容挑着跑，但 `--selftest` 永远必跑：
 
+判定看退出码：0 是全绿，1 是有不符项（以前恒为 0，报告只能靠人眼读）。
+`%TEMP%\likeshot-selftest\<名字>-report.txt` 只印不符项，逐条证据在同名 `-detail.txt`。
+子模式一律 `--selftest --xxx` 两个参数一起给，只给 `--xxx` 会当普通启动挂着不退。
+
 - [ ] `dotnet build` 零错误
 - [ ] `LikeShot.exe --selftest` 全绿（选区 → 标注 → 导出 → 撤销 → 历史入库 → 拼接三场景）
 - [ ] 动过热键、仲裁、让位名单 → `--selftest --hotkeytest` 必跑
 - [ ] 动过设置窗口 → `--selftest --settingstest` 必跑
+- [ ] 动过长截图、拼接、首拍安顿 → `--selftest --longtest` 必跑（约一分钟，滚真页面；黑块和透底的成品像素回归在里面）
 - [ ] 动过 UI：无头回归三件跑一遍（sessiontest / pintest / traytest），渲染出来的 PNG 目检一眼
 - [ ] **修 bug 必须带回归探针**：会话级探针进 SelfTest，输入级的进无头工具（真实鼠标消息驱动），以后谁改回去当场报警
 - [ ] 新增键盘交互过一遍三处守卫：截图层 `OnKeyDownLocal`、钉图窗 `KeyDown`、历史页 `OnHistoryKeyDown`——任何一处都要先让输入框（文字编辑框、RGB 输入框、搜索框）优先

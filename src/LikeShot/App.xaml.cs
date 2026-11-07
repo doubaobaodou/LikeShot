@@ -86,21 +86,21 @@ public partial class App : Application
         if (e.Args.Contains("--capture"))
             Dispatcher.BeginInvoke(() => _controller.BeginCapture());
         else if (e.Args.Contains("--selftest") && e.Args.Contains("--settingstest"))
-            Dispatcher.BeginInvoke(() => SelfTest.SettingsRun(_controller, () => Shutdown()));
+            Dispatcher.BeginInvoke(() => SelfTest.SettingsRun(_controller, Shutdown));
         else if (e.Args.Contains("--selftest") && e.Args.Contains("--historypage"))
-            Dispatcher.BeginInvoke(() => SelfTest.HistoryUiRun(_controller, () => Shutdown()));
+            Dispatcher.BeginInvoke(() => SelfTest.HistoryUiRun(_controller, Shutdown));
         else if (e.Args.Contains("--selftest") && e.Args.Contains("--statusshot"))
-            Dispatcher.BeginInvoke(() => SelfTest.StatusShotRun(_controller, () => Shutdown()));
+            Dispatcher.BeginInvoke(() => SelfTest.StatusShotRun(_controller, Shutdown));
         else if (e.Args.Contains("--selftest") && e.Args.Contains("--selectshot"))
-            Dispatcher.BeginInvoke(() => SelfTest.SelectShotRun(_controller, () => Shutdown()));
+            Dispatcher.BeginInvoke(() => SelfTest.SelectShotRun(_controller, Shutdown));
         else if (e.Args.Contains("--selftest") && e.Args.Contains("--menushot"))
-            Dispatcher.BeginInvoke(() => SelfTest.MenuShotRun(_controller, () => Shutdown()));
+            Dispatcher.BeginInvoke(() => SelfTest.MenuShotRun(_controller, Shutdown));
         else if (e.Args.Contains("--selftest") && e.Args.Contains("--settingsui"))
             Dispatcher.BeginInvoke(SelfTest.ShowSettings);
         else if (e.Args.Contains("--selftest") && e.Args.Contains("--hotkeytest"))
-            Dispatcher.BeginInvoke(() => SelfTest.HotkeyRun(_controller, () => Shutdown()));
+            Dispatcher.BeginInvoke(() => SelfTest.HotkeyRun(_controller, Shutdown));
         else if (e.Args.Contains("--selftest"))
-            Dispatcher.BeginInvoke(() => SelfTest.Run(_controller, () => Shutdown()));
+            Dispatcher.BeginInvoke(() => SelfTest.Run(_controller, Shutdown));
         else if (FirstValue(e.Args, "--snap") is string snapPath)
             Dispatcher.BeginInvoke(() =>
             {
