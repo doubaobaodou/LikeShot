@@ -255,6 +255,13 @@ internal sealed class HotkeyArbiter : IDisposable
     }
 
     /// <summary>
+    /// 这个键此刻是不是我们自己挂着注册。设置界面和自检都要靠它把
+    /// 「被别的程序占了」和「被我们占了」分开——它们在外面再探一次，探到的占用就是我们自己。
+    /// </summary>
+    internal bool HoldsChord(Chord chord) =>
+        _hotkeyHeld && _heldChord is { } held && held.Vk == chord.Vk && held.Modifiers == chord.Modifiers;
+
+    /// <summary>
     /// 挂上 / 卸下真的全局热键。挂上之后按键由系统直接投 WM_HOTKEY 到线程队列，
     /// 不经过前台窗口——这就是任务管理器（提权）在前台时我们也能收到热键的原因。
     /// </summary>
@@ -307,6 +314,9 @@ internal sealed class HotkeyArbiter : IDisposable
 
     /// <summary>自检用：让位应答观察器此刻在不在听、听没听到。</summary>
     internal ForegroundObserver? ObserverForTest => _observer;
+
+    /// <summary>自检用：连着几次让位都没见它响应。攒够 YieldStrikeLimit 就改判接管。</summary>
+    internal int StrikesForTest => _strikes;
 
     private DispatcherTimer BuildWatchdog()
     {

@@ -221,7 +221,8 @@ public sealed partial class SettingsWindow : Window
             return;
         }
 
-        var (attention, text) = ChordProbe.Describe(chord, SplitNames(_yieldNames.Text));
+        var (attention, text) = ChordProbe.Describe(chord, SplitNames(_yieldNames.Text),
+            App.Arbiter?.HoldsChord(chord) == true);
         _chordHint.Text = text;
         _chordHint.Foreground = Theme.Brush(attention ? SettingsTheme.Warn : SettingsTheme.Good);
     }

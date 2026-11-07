@@ -92,8 +92,10 @@ internal static class ChordProbe
     /// <summary>
     /// 给设置界面用的那句「这个键按下去会是谁」。判定口径和仲裁器一致：
     /// 让位进程活着先给它；它连着几次都没接，才改由我们接管。它不在跑才注册一下看看。
+    /// heldByUs 必须先问仲裁器：那个键正被我们自己挂着时，IsFree 探出来必然是「占用」，
+    /// 不区分就会把「我们自己在接」说成「被别的程序占了，建议换一个」。
     /// </summary>
-    public static (bool Attention, string Text) Describe(Chord chord, IEnumerable<string> yieldNames)
+    public static (bool Attention, string Text) Describe(Chord chord, IEnumerable<string> yieldNames, bool heldByUs = false)
     {
         foreach (var name in yieldNames)
         {
@@ -101,6 +103,9 @@ internal static class ChordProbe
             if (System.Diagnostics.Process.GetProcessesByName(name.Trim()).Length == 0) continue;
             return (true, $"{name} 正在运行：按 {chord.Text} 先给 {name}；{name} 连着几次都没接（比如它的截图热键被关了），就改由我们截图");
         }
+
+        if (heldByUs)
+            return (false, $"这个键现在就是我们自己在接：按 {chord.Text} 出我们的截图");
 
         return IsFree(chord)
             ? (false, $"没人注册这个键：按 {chord.Text} 就是我们的截图")
