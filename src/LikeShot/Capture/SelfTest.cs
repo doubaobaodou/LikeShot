@@ -488,6 +488,9 @@ public static class SelfTest
             controller.BeginLongCaptureForTest();
             var runner = controller.RunnerForTest;
             if (runner == null) throw new InvalidOperationException("长截图没起来");
+            // 首拍前有约 200ms 的安顿期（等截图层真正从屏幕合成里消失）：
+            // 不等它，这里读到的还是空画布。
+            await Task.Delay(400);
 
             int seed = runner.AppendedTotal;
             log.AppendLine($"首帧高度={seed}");

@@ -53,11 +53,29 @@ public sealed class LongCaptureRunner : IDisposable
 
     public void Start()
     {
-        foreach (var overlay in _session.Overlays) overlay.Hide();
+        // 先立取景框、再收截图层：这两步之间不留「两层都不在」的空档。
+        // 第一次进长截图这条路径全是首次 JIT，先收后立的写法会拉出几百毫秒的
+        // 光板屏幕——看着就像「透出来的不是我要截的页面」。
         _frame.ShowPassThrough();
+        foreach (var overlay in _session.Overlays) overlay.Hide();
         _bar.ShowBar(_session.Displays, _region, _session.UiScale);
         _preview.Reset(_horizontal);
         _preview.Attach(_session.Displays, _region);
+        SettleBeforeFirstFrame();
+    }
+
+    /// <summary>
+    /// 首拍前的安顿：截图层藏掉之后，屏幕合成要一两帧才真正翻篇，
+    /// 被整窗盖住的目标窗口也要缓过神来；第一次进长截图还得叠一坨首次 JIT。
+    /// 不给这个余量，首帧抓到的可能是截图层还没从合成里消失的那份冻结画面——
+    /// 第一屏就「透出底下的页面」了。
+    /// </summary>
+    private async void SettleBeforeFirstFrame()
+    {
+        var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+        dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+        await System.Threading.Tasks.Task.Delay(200);
+        if (_finished) return;
         _timer.Start();
         Poll();
     }
@@ -337,15 +355,16 @@ public sealed class LongCaptureRunner : IDisposable
 /// </summary>
 internal sealed class LongPreviewWindow : Window
 {
-    private const double ShortDip = 190;    // 预览短边（纵向是宽、横向是高）
+    private const double ShortDip = 190;    // 预览短边（纵向是宽、横向是高）——暗带够宽时的上限
     private const double EdgeMargin = 14;   // 离屏幕上/右边缘的距离
-    private const double MinStripDip = 240; // 选区外的暗带至少要这么高才放得下预览，放不下就藏
+    private const double MinStripDip = 90;  // 选区外的暗带至少要这么高才放得下最小号预览，再窄才藏
 
     private readonly Image _image;
     private readonly Border _cursor;
     private WriteableBitmap? _bmp;
     private byte[]? _scratch;               // 抽稀重铺用的整幅缓冲，常驻不重配，避免每拍上大对象堆
     private bool _horizontal;
+    private double _shortDip = ShortDip;    // 实际用的短边：暗带窄就缩一号，尽量不整条藏
     private int _capPx;                     // 拼接轴的位图像素上限（≈屏幕能给的 DIP 高度，1px≈1DIP）
     private double _capDip;                 // 拼接轴的显示 DIP 上限
     private double _topDip;                 // 落在上方暗带时的固定顶边
@@ -414,27 +433,22 @@ internal sealed class LongPreviewWindow : Window
 
         // 预览绝不能压在选区里：GDI 抓屏会把它抓进每一帧，而它自己每一拍都跟着拼接在变，
         // 行哈希全被搅乱，拼接器认不出滚动量就整帧整帧往画布上贴——「滚到底了还在自己拼」就是这么来的。
-        // 所以在选区外的暗带里安家：顶上那条 → 底下那条 → 都放不下（选区快满整屏）就干脆不显示。
+        // 所以在选区外的暗带里安家，挑更宽的那条；暗带窄就把短边缩一号，
+        // 尽量别整条藏掉——藏了用户就找不到预览了。连最小号都放不下才真的藏。
         double topStrip = regionTop - top;
         double bottomStrip = top + height - regionBottom;
-        if (topStrip >= MinStripDip)
-        {
-            _topDip = top + 6;
-            _bottomAnchored = false;
-            _capDip = topStrip - 20;
-        }
-        else if (bottomStrip >= MinStripDip)
-        {
-            _bottomDip = top + height - 6;
-            _bottomAnchored = true;
-            _capDip = bottomStrip - 20;
-        }
-        else
+        double strip = Math.Max(topStrip, bottomStrip);
+        if (strip < MinStripDip)
         {
             Hide();
             _capDip = 0;
             return;
         }
+        _bottomAnchored = bottomStrip > topStrip;
+        if (_bottomAnchored) _bottomDip = top + height - 6;
+        else _topDip = top + 6;
+        _capDip = strip - 20;
+        _shortDip = Math.Clamp(strip - 24, 60, ShortDip);
         _capPx = (int)Math.Min(_capDip, 1600);   // 位图 1px≈1DIP 就够看，再大只是白吃内存
         Show();
         var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
@@ -487,16 +501,16 @@ internal sealed class LongPreviewWindow : Window
             _image.Source = _bmp;
 
             // 显示尺寸：短边固定，长边按真实比例长，长到屏幕装不下就封顶。
-            double lenDip = Math.Min(_capDip, ShortDip * canvasLen / crossLen);
+            double lenDip = Math.Min(_capDip, _shortDip * canvasLen / crossLen);
             _lastDisplayLen = lenDip;
             if (_horizontal)
             {
-                _image.Height = ShortDip;
+                _image.Height = _shortDip;
                 _image.Width = lenDip;
             }
             else
             {
-                _image.Width = ShortDip;
+                _image.Width = _shortDip;
                 _image.Height = lenDip;
             }
 
@@ -512,13 +526,13 @@ internal sealed class LongPreviewWindow : Window
                     Canvas.SetLeft(_cursor, offset);
                     Canvas.SetTop(_cursor, 0);
                     _cursor.Width = Math.Max(2, viewportLen * ratio);
-                    _cursor.Height = ShortDip;
+                    _cursor.Height = _shortDip;
                 }
                 else
                 {
                     Canvas.SetLeft(_cursor, 0);
                     Canvas.SetTop(_cursor, offset);
-                    _cursor.Width = ShortDip;
+                    _cursor.Width = _shortDip;
                     _cursor.Height = Math.Max(2, viewportLen * ratio);
                 }
             }
