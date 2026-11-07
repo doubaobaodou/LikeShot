@@ -492,6 +492,10 @@ public static class SelfTest
             int seed = runner.AppendedTotal;
             log.AppendLine($"首帧高度={seed}");
 
+            // 实时预览（0.1.14）：右上角那块要跟着拼接变长，起个初值，滚完再对。
+            var preview = runner.PreviewForTest;
+            double previewLen0 = preview.DisplayedLengthDip;
+
             // 自动滚到「页面自己报到底了、且画布不再长高」为止，最多 90 秒。
             // 40 秒那版是掐着秒表收的，页面还没滚完就被判成「少了」——判据得是页面到底，不是秒数。
             runner.ToggleAutoScroll();
@@ -510,6 +514,23 @@ public static class SelfTest
                 if (atBottom && stuck >= 2) break;
             }
             log.AppendLine($"跑了 {ticks + 1} 秒收工");
+
+            double previewLen1 = preview.DisplayedLengthDip;
+            log.AppendLine($"实时预览：起始 {previewLen0:0}DIP → 结束 {previewLen1:0}DIP " +
+                           $"{(previewLen1 > previewLen0 ? "（跟着变长了，对）" : "（没变长，不对）")}");
+            FlushIdle();
+            preview.UpdateLayout();
+            if (preview.ActualWidth >= 1 && preview.ActualHeight >= 1)
+            {
+                int pw = (int)Math.Ceiling(preview.ActualWidth), ph = (int)Math.Ceiling(preview.ActualHeight);
+                var rtb = new RenderTargetBitmap(pw, ph, 96, 96, PixelFormats.Pbgra32);
+                rtb.Render(preview);
+                var enc = new PngBitmapEncoder();
+                enc.Frames.Add(BitmapFrame.Create(rtb));
+                string previewPath = Path.Combine(dir, "preview.png");
+                using (var fs = File.Create(previewPath)) enc.Save(fs);
+                log.AppendLine($"预览取证={pw}x{ph} -> {previewPath}");
+            }
 
             var image = runner.BuildResult();
             if (image != null)

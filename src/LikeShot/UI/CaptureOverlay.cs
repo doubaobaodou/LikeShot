@@ -279,7 +279,8 @@ public sealed class CaptureOverlay : Window
         var s = _session.FinalRect();
         double w = _toolbar.NaturalWidth, h = _toolbar.NaturalHeight;
         double scale = _display.Scale;
-        double left = Math.Clamp((s.X - _display.Bounds.X) / scale, 4,
+        // QQ 口径：工具栏右缘对齐选区右缘（选区贴屏幕右边时夹回屏内），不是左对齐。
+        double left = Math.Clamp((s.X + s.Width - _display.Bounds.X) / scale - w, 4,
             Math.Max(4, _display.Bounds.Width / scale - w - 4));
         double maxTop = _display.Bounds.Height / scale - h - 4;
 

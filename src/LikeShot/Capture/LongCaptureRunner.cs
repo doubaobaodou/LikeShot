@@ -20,6 +20,7 @@ public sealed class LongCaptureRunner : IDisposable
     private readonly Action _exitCapture;
     private readonly LongFrameWindow _frame;
     private readonly ToolbarWindow _bar;
+    private readonly LongPreviewWindow _preview;
     private readonly DispatcherTimer _timer;
 
     private LongStitcher? _stitcher;
@@ -38,6 +39,7 @@ public sealed class LongCaptureRunner : IDisposable
 
         _frame = new LongFrameWindow(session.Displays, _region);
         _bar = new ToolbarWindow(session, this);
+        _preview = new LongPreviewWindow(_horizontal);
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(Math.Max(90, App.Config.LongCapturePollMilliseconds)) };
         _timer.Tick += (_, _) => Poll();
     }
@@ -46,12 +48,15 @@ public sealed class LongCaptureRunner : IDisposable
     public bool IsHorizontal => _horizontal;
     public int AppendedTotal => _stitcher?.Height ?? 0;
     public string StitchDiag => _stitcher?.Diag ?? "";
+    internal LongPreviewWindow PreviewForTest => _preview;
 
     public void Start()
     {
         foreach (var overlay in _session.Overlays) overlay.Hide();
         _frame.ShowPassThrough();
         _bar.ShowBar(_session.Displays, _region, _session.UiScale);
+        _preview.Reset(_horizontal);
+        _preview.Attach(_session.Displays, _region);
         _timer.Start();
         Poll();
     }
@@ -63,6 +68,7 @@ public sealed class LongCaptureRunner : IDisposable
         _stitcher = null;
         _stableTicks = 0;
         _frame.UpdateRegion(_region);
+        _preview.Reset(horizontal);
     }
 
     public void ToggleAutoScroll()
@@ -117,6 +123,8 @@ public sealed class LongCaptureRunner : IDisposable
         {
             _bar.SetStatus($"已拼接 {_stitcher.Height} 像素高");
         }
+
+        _preview.UpdateStitch(_stitcher, _region);
     }
 
     private void ScrollOnce()
@@ -248,6 +256,7 @@ public sealed class LongCaptureRunner : IDisposable
         _timer.Stop();
         _bar.Close();
         _frame.Close();
+        _preview.Close();
     }
 
     public void Dispose()
@@ -255,6 +264,198 @@ public sealed class LongCaptureRunner : IDisposable
         _timer.Stop();
         _frame.Close();
         _bar.Close();
+        _preview.Close();
+    }
+}
+
+/// <summary>
+/// 长截图的实时预览：贴在屏幕右上角，图拼到哪儿它就长到哪儿，蓝框标出画面此刻停在长图的哪一段。
+/// 自己维护一张「预览分辨率」的小位图，每一拍把整幅画布按行抽稀铺进去（画布比预览还短时就 1:1）。
+/// 不给长图做全量拷贝——拼接画布本身已经是几十上百 MB 那份，预览每拍再复制一份，内存和节奏都扛不住。
+/// 窗口完全点击穿透：预览只是给人看的，绝不能挡住下面页面的滚动。
+/// </summary>
+internal sealed class LongPreviewWindow : Window
+{
+    private const double ShortDip = 190;    // 预览短边（纵向是宽、横向是高）
+    private const double EdgeMargin = 14;   // 离屏幕上/右边缘的距离
+
+    private readonly Image _image;
+    private readonly Border _cursor;
+    private WriteableBitmap? _bmp;
+    private byte[]? _scratch;               // 抽稀重铺用的整幅缓冲，常驻不重配，避免每拍上大对象堆
+    private bool _horizontal;
+    private int _capPx;                     // 拼接轴的位图像素上限（≈屏幕能给的 DIP 高度，1px≈1DIP）
+    private double _capDip;                 // 拼接轴的显示 DIP 上限
+    private Display _display = null!;
+    private double _lastDisplayLen;
+    private int _lastCanvasLen;             // 上一拍铺进位图时的画布长度：没长就整拍跳过
+
+    public LongPreviewWindow(bool horizontal)
+    {
+        _horizontal = horizontal;
+        WindowStyle = WindowStyle.None;
+        ResizeMode = ResizeMode.NoResize;
+        ShowInTaskbar = false;
+        ShowActivated = false;
+        Topmost = true;
+        Focusable = false;
+        IsHitTestVisible = false;
+        AllowsTransparency = true;
+        Background = Brushes.Transparent;
+        SizeToContent = SizeToContent.WidthAndHeight;
+
+        _image = new Image { Stretch = Stretch.Fill };
+        _cursor = new Border
+        {
+            BorderBrush = Theme.Brush(Theme.Accent),
+            BorderThickness = new Thickness(2),
+            Background = Brushes.Transparent,
+            Visibility = Visibility.Collapsed
+        };
+        var overlay = new Canvas();
+        overlay.Children.Add(_cursor);
+        var grid = new Grid();
+        grid.Children.Add(_image);
+        grid.Children.Add(overlay);
+        Content = new Border
+        {
+            Background = new SolidColorBrush(Color.FromRgb(0x22, 0x22, 0x22)) { Opacity = 0.9 },
+            Padding = new Thickness(4),
+            CornerRadius = new CornerRadius(6),
+            Child = grid
+        };
+    }
+
+    /// <summary>自检用：预览此刻显示出来的拼接轴长度（DIP）。</summary>
+    internal double DisplayedLengthDip => _lastDisplayLen;
+
+    /// <summary>换了方向或重开一轮：画布横竖换了轴，位图得推倒重来。</summary>
+    public void Reset(bool horizontal)
+    {
+        _horizontal = horizontal;
+        _bmp = null;
+        _scratch = null;
+        _cursor.Visibility = Visibility.Collapsed;
+    }
+
+    public void Attach(IReadOnlyList<Display> displays, Int32Rect region)
+    {
+        _display = displays.FirstOrDefault(d =>
+            d.Contains(region.X + region.Width / 2, region.Y + region.Height / 2)) ?? displays[0];
+        double scale = _display.Scale;
+        // 拼接轴上限：这屏的 DIP 尺寸减去上下留白（顶上不顶到边、底下给工具栏和状态句留地方）。
+        double spanDip = (_horizontal ? _display.Bounds.Width : _display.Bounds.Height) / scale;
+        _capDip = Math.Max(360, spanDip - EdgeMargin * 2 - 90);
+        _capPx = (int)Math.Min(_capDip, 1600);   // 位图 1px≈1DIP 就够看，再大只是白吃内存
+        Show();
+        var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        Win32.SetWindowLong(hwnd, Win32.GWL_EXSTYLE,
+            Win32.GetWindowLong(hwnd, Win32.GWL_EXSTYLE) | Win32.WS_EX_TRANSPARENT | Win32.WS_EX_TOOLWINDOW);
+        Win32.SetWindowPos(hwnd, Win32.HWND_TOPMOST, 0, 0, 0, 0,
+            Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
+    }
+
+    /// <summary>
+    /// 每一拍把画布重铺进预览位图：目标行 j 显示画布行 j*canvasLen/mappedRows（画布短于上限时就是 1:1）。
+    /// 画布每拍都在长，映射随之整体移动，所以纵向追加那种增量写法在这里不成立，整幅重铺反而是最省事的正确做法。
+    /// </summary>
+    public void UpdateStitch(LongStitcher? stitcher, Int32Rect region)
+    {
+        if (stitcher == null || _display == null) return;
+        int canvasLen = _horizontal ? stitcher.Width : stitcher.Height;
+        int crossLen = _horizontal ? stitcher.Height : stitcher.Width;
+        if (canvasLen <= 0 || crossLen <= 0) return;
+        if (canvasLen == _lastCanvasLen && _bmp != null) return;   // 一帧没长：画面和蓝框都不会动，白铺一遍
+        _lastCanvasLen = canvasLen;
+
+        try
+        {
+            int mappedRows = Math.Min(canvasLen, _capPx);
+            EnsureBitmap(crossLen, stitcher.Stride);
+
+            if (_horizontal)
+            {
+                int bmpStride = _bmp!.PixelWidth * 4;
+                Array.Clear(_scratch!, 0, _scratch!.Length);
+                int columns = Math.Min(_bmp.PixelWidth, canvasLen);
+                for (int x = 0; x < columns; x++)
+                {
+                    int srcX = (int)((long)x * canvasLen / columns);
+                    stitcher.CopyCanvasColumns(srcX, 1, _scratch!, bmpStride, x * 4);
+                }
+                _bmp.WritePixels(new Int32Rect(0, 0, _bmp.PixelWidth, crossLen), _scratch!, bmpStride, 0);
+            }
+            else
+            {
+                int stride = stitcher.Stride;
+                for (int j = 0; j < mappedRows; j++)
+                {
+                    int srcRow = (int)((long)j * canvasLen / mappedRows);
+                    stitcher.CopyCanvasRows(srcRow, 1, _scratch!, j * stride);
+                }
+                _bmp!.WritePixels(new Int32Rect(0, 0, stitcher.Width, mappedRows), _scratch!, stride, 0);
+            }
+            _image.Source = _bmp;
+
+            // 显示尺寸：短边固定，长边按真实比例长，长到屏幕装不下就封顶。
+            double lenDip = Math.Min(_capDip, ShortDip * canvasLen / crossLen);
+            _lastDisplayLen = lenDip;
+            if (_horizontal)
+            {
+                _image.Height = ShortDip;
+                _image.Width = lenDip;
+            }
+            else
+            {
+                _image.Width = ShortDip;
+                _image.Height = lenDip;
+            }
+
+            // 蓝框：当前实时画面在整幅长图里的位置。取最后一帧对应的那一段（近似，够指路用）。
+            int viewportLen = _horizontal ? region.Width : region.Height;
+            if (viewportLen > 0 && viewportLen < canvasLen)
+            {
+                double ratio = lenDip / canvasLen;
+                double offset = (canvasLen - viewportLen) * ratio;
+                _cursor.Visibility = Visibility.Visible;
+                if (_horizontal)
+                {
+                    Canvas.SetLeft(_cursor, offset);
+                    Canvas.SetTop(_cursor, 0);
+                    _cursor.Width = Math.Max(2, viewportLen * ratio);
+                    _cursor.Height = ShortDip;
+                }
+                else
+                {
+                    Canvas.SetLeft(_cursor, 0);
+                    Canvas.SetTop(_cursor, offset);
+                    _cursor.Width = ShortDip;
+                    _cursor.Height = Math.Max(2, viewportLen * ratio);
+                }
+            }
+            else _cursor.Visibility = Visibility.Collapsed;
+
+            // 右上角钉死：宽度随内容变化时右缘不动，向左生长。
+            double right = (_display.Bounds.X + _display.Bounds.Width) / _display.Scale;
+            double top = _display.Bounds.Y / _display.Scale;
+            Left = right - ActualWidth - EdgeMargin;
+            Top = top + EdgeMargin;
+        }
+        catch (Exception ex)
+        {
+            // 预览是配菜，绝不能把拼接本体带崩：这一拍画不了就下一拍再说。
+            Log.Error("长截图预览更新失败", ex);
+            _cursor.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void EnsureBitmap(int crossLen, int canvasStride)
+    {
+        int bmpW = _horizontal ? _capPx : canvasStride / 4;   // 纵向：位图宽=画布宽；横向：位图宽=上限
+        int bmpH = _horizontal ? crossLen : _capPx;
+        if (_bmp != null && _bmp.PixelWidth == bmpW && _bmp.PixelHeight == bmpH) return;
+        _bmp = new WriteableBitmap(bmpW, bmpH, 96, 96, System.Windows.Media.PixelFormats.Bgra32, null);
+        _scratch = new byte[bmpW * 4 * bmpH];
     }
 }
 

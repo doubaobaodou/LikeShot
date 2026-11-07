@@ -256,4 +256,37 @@ public sealed class LongStitcher
         bmp.Freeze();
         return bmp;
     }
+
+    /// <summary>
+    /// 实时预览用：把画布 [startRow, startRow+count) 行整块拷进 dest（Bgra32，dest 从 destOffset 字节起）。
+    /// 只拷要的那几行，不为预览把整幅长图再复制一份——画布本身已经是几十上百 MB 那份了。
+    /// </summary>
+    public void CopyCanvasRows(int startRow, int count, byte[] dest, int destOffset)
+    {
+        startRow = Math.Clamp(startRow, 0, _height);
+        count = Math.Min(count, Math.Max(0, _height - startRow));
+        if (count > 0) Buffer.BlockCopy(_buffer, startRow * _stride, dest, destOffset, count * _stride);
+    }
+
+    /// <summary>
+    /// 横向拼接时预览用：把画布 [startCol, startCol+count) 列拷进 dest，
+    /// dest 按行存放（每行 destStride 字节，从 destOffset 字节起）。列在源里不连续，只能逐像素搬。
+    /// </summary>
+    public void CopyCanvasColumns(int startCol, int count, byte[] dest, int destStride, int destOffset)
+    {
+        startCol = Math.Clamp(startCol, 0, _width);
+        count = Math.Min(count, Math.Max(0, _width - startCol));
+        for (int y = 0; y < _height; y++)
+        {
+            int src = y * _stride + startCol * 4;
+            int dst = destOffset + y * destStride;
+            for (int x = 0; x < count * 4; x += 4)
+            {
+                dest[dst + x] = _buffer[src + x];
+                dest[dst + x + 1] = _buffer[src + x + 1];
+                dest[dst + x + 2] = _buffer[src + x + 2];
+                dest[dst + x + 3] = _buffer[src + x + 3];
+            }
+        }
+    }
 }
