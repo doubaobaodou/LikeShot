@@ -82,10 +82,15 @@ public sealed class LongCaptureRunner : IDisposable
         int cx = _region.X + _region.Width / 2, cy = _region.Y + _region.Height / 2;
         var target = Win32.WindowFromPoint(new Win32.POINT { X = cx, Y = cy });
         if (target == nint.Zero) target = nint.Zero;
+        Log.Write($"长截图首拍前目标窗口 {DescribeWindow(target)}");
+
+        // 对照取证：截图层当时显示的那张快照的选区裁剪。它和下面几帧逐张比，
+        // 就能分清「抓屏抓错了」还是「屏幕那一刻真的不是用户选的页面」。
+        DumpSnapshotRegionForEvidence();
 
         // 探测帧（踢之前）：合成层这时是什么样，留个底。
         var (probe, probeStride) = _grabber.Grab(_region);
-        DumpFrameForEvidence(probe, probeStride, "long-pre-kick.png");
+        DumpFrameForEvidence(probe, probeStride, "pre-kick.png");
 
         for (int beat = 0; beat < 2; beat++)
         {
@@ -97,6 +102,8 @@ public sealed class LongCaptureRunner : IDisposable
             }
             await System.Threading.Tasks.Task.Delay(250);
             if (_finished) return;
+            var (after, afterStride) = _grabber.Grab(_region);
+            DumpFrameForEvidence(after, afterStride, $"kick{beat + 1}.png");
         }
         Log.Write($"长截图首拍前唤醒目标窗口 hwnd={target}（踢了两轮）");
         _timer.Start();
@@ -105,24 +112,72 @@ public sealed class LongCaptureRunner : IDisposable
 
     /// <summary>
     /// 抓屏内容落盘留证：用户报「长图里有黑块/别的窗口」时，先看这几个文件——
-    /// 抓屏那一刻选区里到底是什么，一目了然。每次长截图覆盖。
+    /// 抓屏那一刻选区里到底是什么，一目了然。每次长截图覆盖，落在 Temp 不沾用户数据目录。
     /// </summary>
-    private void DumpFrameForEvidence(byte[] buffer, int stride, string fileName)
+    private static string DiagDirectory =>
+        System.IO.Path.Combine(System.IO.Path.GetTempPath(), "likeshot-longdiag");
+
+    private void DumpSnapshotRegionForEvidence()
     {
         try
         {
-            var bmp = System.Windows.Media.Imaging.BitmapSource.Create(
-                _region.Width, _region.Height, 96, 96,
-                System.Windows.Media.PixelFormats.Bgra32, null, buffer, stride);
-            bmp.Freeze();
-            string path = System.IO.Path.Combine(App.ConfigDirectory, fileName);
-            var error = Exporter.TryWrite(bmp, path);
-            Log.Write(error == null ? $"长截图抓屏留证 {fileName} -> {path}" : $"长截图抓屏留证失败：{error}");
+            byte[] pixels = _session.Snapshot.CopyRegion(_region);
+            WriteEvidenceOffThread(pixels, _region.Width * 4, "snap-region.png");
         }
         catch (Exception ex)
         {
-            Log.Error("长截图抓屏留证失败", ex);
+            Log.Error("长截图快照留证失败", ex);
         }
+    }
+
+    /// <summary>被踢的窗口到底是谁：子窗口 hwnd 看不出归属，追到根窗口报进程名和主标题。</summary>
+    private static string DescribeWindow(nint hwnd)
+    {
+        if (hwnd == nint.Zero) return "hwnd=无";
+        var root = Win32.GetAncestor(hwnd, Win32.GA_ROOTOWNER);
+        if (root == nint.Zero) root = hwnd;
+        Win32.GetWindowThreadProcessId(root, out uint pid);
+        string who = "进程已退出";
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById((int)pid);
+            who = $"{process.ProcessName}「{process.MainWindowTitle}」";
+        }
+        catch { /* 进程刚好退了：按退出算 */ }
+        return $"hwnd={root} pid={pid} {who}";
+    }
+
+    /// <summary>
+    /// 抓屏那块缓冲是复用的（自检有一条盯着它），后台不能直接读，所以拷一份再交出去。
+    /// 编码写盘也不能留在首拍之前：一张选区图编成 PNG 要几百毫秒，四张压在一起，
+    /// 用户点了「长截图」就得对着静止的屏幕干等一秒多。留证可以慢，首拍不行。
+    /// </summary>
+    private void DumpFrameForEvidence(byte[] buffer, int stride, string fileName)
+    {
+        var copy = new byte[stride * _region.Height];
+        Buffer.BlockCopy(buffer, 0, copy, 0, copy.Length);
+        WriteEvidenceOffThread(copy, stride, fileName);
+    }
+
+    private void WriteEvidenceOffThread(byte[] pixels, int stride, string fileName)
+    {
+        var region = _region;   // 带上这一刻的选区：中途翻方向改了 _region，后台也不会按新尺寸解旧图
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            try
+            {
+                var bmp = BitmapSource.Create(region.Width, region.Height, 96, 96,
+                    PixelFormats.Bgra32, null, pixels, stride);
+                bmp.Freeze();
+                System.IO.Directory.CreateDirectory(DiagDirectory);
+                var error = Exporter.TryWrite(bmp, System.IO.Path.Combine(DiagDirectory, fileName));
+                Log.Write(error == null ? $"长截图抓屏留证 {fileName}" : $"长截图抓屏留证失败：{error}");
+            }
+            catch (Exception ex)
+            {
+                Log.Error("长截图抓屏留证失败", ex);
+            }
+        });
     }
 
     public void SetDirection(bool horizontal)
@@ -175,7 +230,7 @@ public sealed class LongCaptureRunner : IDisposable
         if (_stitcher == null)
         {
             _stitcher = new LongStitcher(_region, buffer, stride, reserved);
-            DumpFrameForEvidence(buffer, stride, "long-first-frame.png");
+            DumpFrameForEvidence(buffer, stride, "first-frame.png");
         }
         else
         {
