@@ -65,19 +65,54 @@ public sealed class LongCaptureRunner : IDisposable
     }
 
     /// <summary>
-    /// 首拍前的安顿：截图层藏掉之后，屏幕合成要一两帧才真正翻篇，
-    /// 被整窗盖住的目标窗口也要缓过神来；第一次进长截图还得叠一坨首次 JIT。
-    /// 不给这个余量，首帧抓到的可能是截图层还没从合成里消失的那份冻结画面——
-    /// 第一屏就「透出底下的页面」了。
+    /// 首拍前的安顿：截图层藏掉之后，屏幕合成要一两帧才真正翻篇；被整窗盖了一路的目标
+    /// 窗口（尤其走显卡合成的浏览器）回神更慢——露出来那一拍还可能是它底下的窗口，
+    /// 「第一次长截图透出底下窗口」就是这一拍被抓进去了。所以先踢它一下
+    /// （强制重绘 + 一条鼠标移动消息），前后各等一拍，才开始拼第一帧。
     /// </summary>
     private async void SettleBeforeFirstFrame()
     {
         var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
         dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
-        await System.Threading.Tasks.Task.Delay(200);
+        await System.Threading.Tasks.Task.Delay(250);
+        if (_finished) return;
+
+        int cx = _region.X + _region.Width / 2, cy = _region.Y + _region.Height / 2;
+        var target = Win32.WindowFromPoint(new Win32.POINT { X = cx, Y = cy });
+        if (target != nint.Zero)
+        {
+            Win32.RedrawWindow(target, nint.Zero, nint.Zero,
+                Win32.RDW_INVALIDATE | Win32.RDW_ERASE | Win32.RDW_ALLCHILDREN | Win32.RDW_FRAME | Win32.RDW_UPDATENOW);
+            Win32.PostMessage(target, Win32.WM_MOUSEMOVE, nint.Zero, Win32.ScreenPointLParam(cx, cy));
+            Log.Write($"长截图首拍前唤醒目标窗口 hwnd={target}");
+        }
+
+        await System.Threading.Tasks.Task.Delay(250);
         if (_finished) return;
         _timer.Start();
         Poll();
+    }
+
+    /// <summary>
+    /// 首帧留证：用户报「长截图截到的是别的窗口」时，先看这个文件——
+    /// 抓屏那一刻选区里到底是什么，一目了然。每次长截图覆盖。
+    /// </summary>
+    private void DumpFirstFrameForEvidence(byte[] buffer, int stride)
+    {
+        try
+        {
+            var bmp = System.Windows.Media.Imaging.BitmapSource.Create(
+                _region.Width, _region.Height, 96, 96,
+                System.Windows.Media.PixelFormats.Bgra32, null, buffer, stride);
+            bmp.Freeze();
+            string path = System.IO.Path.Combine(App.ConfigDirectory, "long-first-frame.png");
+            var error = Exporter.TryWrite(bmp, path);
+            Log.Write(error == null ? $"长截图首帧留证 -> {path}" : $"长截图首帧留证失败：{error}");
+        }
+        catch (Exception ex)
+        {
+            Log.Error("长截图首帧留证失败", ex);
+        }
     }
 
     public void SetDirection(bool horizontal)
@@ -121,10 +156,16 @@ public sealed class LongCaptureRunner : IDisposable
             if (rect.Y + rect.Height >= _region.Y + _region.Height)
                 reserved = Math.Max(reserved, rect.Height);
         }
+        // 预览压在选区底边时它还会往长里长：按长满的预算整段预留，不按当前高度——
+        // 不然超出当前预留的那一截又把行哈希搅了。
+        double previewBudget = _preview.IsVisible ? _preview.BottomBandBudgetDip : 0;
+        if (previewBudget > 0)
+            reserved = Math.Max(reserved, (int)Math.Round(previewBudget * _session.Displays[0].Scale));
 
         if (_stitcher == null)
         {
             _stitcher = new LongStitcher(_region, buffer, stride, reserved);
+            DumpFirstFrameForEvidence(buffer, stride);
         }
         else
         {
@@ -156,7 +197,7 @@ public sealed class LongCaptureRunner : IDisposable
         else
         {
             _bar.SetStatus($"已拼接 {_stitcher.Height} 像素高" +
-                           (reserved > 0 ? "（工具栏压在选区底边：这一条不会拼进长图）"
+                           (reserved > 0 ? "（工具栏/预览压在选区底边：这一条不会拼进长图）"
                            : occluded ? "（自家悬浮窗压在选区里：长图里会留一块纯色）" : ""));
         }
 
@@ -370,6 +411,9 @@ internal sealed class LongPreviewWindow : Window
     private double _topDip;                 // 落在上方暗带时的固定顶边
     private double _bottomDip;              // 落在下方暗带时的固定底边（长的时候往上长）
     private bool _bottomAnchored;
+    private bool _inside;                   // 暗带连最小号都放不下：压进选区底边右角（预留带里）
+    private double _insideRightDip;         // 压边模式：钉在选区右缘/底缘（屏幕 DIP）
+    private double _insideBottomDip;
     private Display _display = null!;
     private double _lastDisplayLen;
     private int _lastCanvasLen;             // 上一拍铺进位图时的画布长度：没长就整拍跳过
@@ -413,12 +457,19 @@ internal sealed class LongPreviewWindow : Window
     /// <summary>自检用：预览此刻显示出来的拼接轴长度（DIP）。</summary>
     internal double DisplayedLengthDip => _lastDisplayLen;
 
+    /// <summary>
+    /// 压边模式下预览长满要占的高度（窗口整体，DIP）；拼接器按这个预算把选区底边整段留成固定底栏。
+    /// 不压边就是 0。
+    /// </summary>
+    internal double BottomBandBudgetDip => _inside ? _capDip + 12 : 0;
+
     /// <summary>换了方向或重开一轮：画布横竖换了轴，位图得推倒重来。</summary>
     public void Reset(bool horizontal)
     {
         _horizontal = horizontal;
         _bmp = null;
         _scratch = null;
+        _inside = false;
         _cursor.Visibility = Visibility.Collapsed;
     }
 
@@ -430,25 +481,35 @@ internal sealed class LongPreviewWindow : Window
         double top = _display.Bounds.Y / scale, height = _display.Bounds.Height / scale;
         double regionTop = (region.Y - _display.Bounds.Y) / scale;
         double regionBottom = (region.Bottom() - _display.Bounds.Y) / scale;
+        double regionHeightDip = region.Height / scale;
 
-        // 预览绝不能压在选区里：GDI 抓屏会把它抓进每一帧，而它自己每一拍都跟着拼接在变，
-        // 行哈希全被搅乱，拼接器认不出滚动量就整帧整帧往画布上贴——「滚到底了还在自己拼」就是这么来的。
-        // 所以在选区外的暗带里安家，挑更宽的那条；暗带窄就把短边缩一号，
-        // 尽量别整条藏掉——藏了用户就找不到预览了。连最小号都放不下才真的藏。
+        // 预览绝不能压在选区里被拼进长图……除非它压在选区底边、而那条底边整段被拼接器
+        // 预留成固定底栏——那些行从第一帧起就不进画布，预览怎么变都搅不了行哈希。
+        // 所以安家顺序：上方暗带 / 下方暗带挑宽的 → 都太窄就压进选区底边右角（长边封顶在预留带高度里）。
         double topStrip = regionTop - top;
         double bottomStrip = top + height - regionBottom;
         double strip = Math.Max(topStrip, bottomStrip);
-        if (strip < MinStripDip)
+        if (strip >= MinStripDip)
         {
-            Hide();
-            _capDip = 0;
-            return;
+            _inside = false;
+            _bottomAnchored = bottomStrip > topStrip;
+            if (_bottomAnchored) _bottomDip = top + height - 6;
+            else _topDip = top + 6;
+            _capDip = strip - 20;
+            _shortDip = Math.Clamp(strip - 24, 60, ShortDip);
         }
-        _bottomAnchored = bottomStrip > topStrip;
-        if (_bottomAnchored) _bottomDip = top + height - 6;
-        else _topDip = top + 6;
-        _capDip = strip - 20;
-        _shortDip = Math.Clamp(strip - 24, 60, ShortDip);
+        else
+        {
+            double budget = Math.Min(220, regionHeightDip / 3);
+            if (budget < 70) { Hide(); _capDip = 0; return; }   // 选区矮到连压边都放不下才真的藏
+            _inside = true;
+            _bottomAnchored = true;
+            _insideBottomDip = region.Bottom() / scale;
+            _insideRightDip = region.Right() / scale;
+            _bottomDip = _insideBottomDip;
+            _capDip = budget - 8;
+            _shortDip = ShortDip;
+        }
         _capPx = (int)Math.Min(_capDip, 1600);   // 位图 1px≈1DIP 就够看，再大只是白吃内存
         Show();
         var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
@@ -539,7 +600,9 @@ internal sealed class LongPreviewWindow : Window
             else _cursor.Visibility = Visibility.Collapsed;
 
             // 右缘钉死、往左生长；纵向位置看安家在哪条暗带：下方暗带顶边固定，上方暗带底边固定往上长。
-            double right = (_display.Bounds.X + _display.Bounds.Width) / _display.Scale;
+            // 压边模式钉在选区底边右角：右缘=选区右缘往里缩，底缘=选区底边（整条都在预留带里）。
+            double right = _inside ? _insideRightDip
+                                   : (_display.Bounds.X + _display.Bounds.Width) / _display.Scale;
             Left = right - ActualWidth - EdgeMargin;
             Top = _bottomAnchored ? _bottomDip - ActualHeight : _topDip;
         }

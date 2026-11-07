@@ -233,9 +233,20 @@ internal static class Win32
     [DllImport("user32.dll")]
     public static extern bool PostMessage(nint hWnd, uint msg, nint wParam, nint lParam);
 
+    /// <summary>强制目标窗口立刻重绘一遍。长截图首拍前用它踢醒被截图层盖了一路的目标窗口。</summary>
+    [DllImport("user32.dll")]
+    public static extern bool RedrawWindow(nint hWnd, nint lprcUpdate, nint hrgnUpdate, uint flags);
+
+    public const uint RDW_INVALIDATE = 0x0001;
+    public const uint RDW_ERASE = 0x0004;
+    public const uint RDW_ALLCHILDREN = 0x0080;
+    public const uint RDW_UPDATENOW = 0x0100;
+    public const uint RDW_FRAME = 0x0400;
+
     /// <summary>滚轮消息：wParam 的高位 WORD 是有符号的格数，lParam 是屏幕坐标。</summary>
     public const uint WM_MOUSEWHEEL = 0x020A;
     public const uint WM_MOUSEHWHEEL = 0x020E;
+    public const uint WM_MOUSEMOVE = 0x0200;
 
     /// <summary>把 WM_MOUSEWHEEL 的 wParam 拼成 MAKEWPARAM(0, delta)：delta 按 SHORT 进高位。</summary>
     public static nint WheelWParam(int delta) => new(((long)(uint)(ushort)(short)delta) << 16);
