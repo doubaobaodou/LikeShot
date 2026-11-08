@@ -196,6 +196,18 @@ public sealed class UpdateChecker
         }
     }
 
+    public static void OpenRepoPage()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(RepoUrl) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Log.Error("打开 GitHub 仓库页失败", ex);
+        }
+    }
+
     /// <summary>
     /// 把 setup 资产下载到 Temp 再拉起安装器（安装器会自己关掉旧实例）。
     /// 进度按字节回调；返回 null 表示下载完成且安装器已启动，否则是给用户看的原因。

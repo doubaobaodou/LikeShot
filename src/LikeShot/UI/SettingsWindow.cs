@@ -66,7 +66,7 @@ public sealed partial class SettingsWindow : Window
         Foreground = Theme.Brush(SettingsTheme.TextSecondary),
         Margin = new Thickness(0, 2, 0, 0)
     };
-    private Button? _checkButton, _installButton, _releasePageButton;
+    private Button? _checkButton, _installButton, _releasePageButton, _githubLink;
     private bool _downloading;
 
     public SettingsWindow(AppConfig config)
@@ -210,6 +210,7 @@ public sealed partial class SettingsWindow : Window
     internal string UpdateStatusForTest => _updateStatus.Text;
     internal bool CheckButtonEnabledForTest => _checkButton?.IsEnabled == true;
     internal bool InstallButtonVisibleForTest => _installButton?.Visibility == Visibility.Visible;
+    internal string? GithubLinkTargetForTest => _githubLink?.Tag as string;
     internal bool AutoCheckForTest { get => _checkUpdates.IsChecked == true; set => _checkUpdates.IsChecked = value; }
     internal void PickForTest(string format, int poll, int notches)
     {
@@ -458,6 +459,11 @@ public sealed partial class SettingsWindow : Window
             Foreground = Theme.Brush(SettingsTheme.TextPrimary)
         });
         identity.Children.Add(_aboutVersion);
+        _githubLink = LinkButton("GitHub 仓库");
+        _githubLink.Tag = Shell.UpdateChecker.RepoUrl;
+        _githubLink.Margin = new Thickness(0, 6, 0, 0);
+        _githubLink.Click += (_, _) => Shell.UpdateChecker.OpenRepoPage();
+        identity.Children.Add(_githubLink);
 
         var identityRow = new StackPanel { Orientation = Orientation.Horizontal };
         if (Icon is BitmapSource logo)
@@ -796,6 +802,30 @@ public sealed partial class SettingsWindow : Window
     }
 
     /// <summary>Win11 款按钮：白底灰边的普通款，或者蓝底白字的主按钮。颜色走 style，触发器才够得着。</summary>
+    private static Button LinkButton(string text)
+    {
+        var style = new Style(typeof(Button));
+        style.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
+        style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
+        style.Setters.Add(new Setter(Control.ForegroundProperty, Theme.Brush(SettingsTheme.Accent)));
+        style.Setters.Add(new Setter(FrameworkElement.CursorProperty, Cursors.Hand));
+        var template = new ControlTemplate(typeof(Button));
+        var content = new FrameworkElementFactory(typeof(ContentPresenter));
+        content.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Left);
+        template.VisualTree = content;
+        style.Setters.Add(new Setter(Control.TemplateProperty, template));
+        var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+        hover.Setters.Add(new Setter(Control.ForegroundProperty, Theme.Brush(SettingsTheme.AccentHover)));
+        style.Triggers.Add(hover);
+        return new Button
+        {
+            Style = style,
+            FontSize = 12,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Content = new TextBlock { Text = text, TextDecorations = TextDecorations.Underline }
+        };
+    }
+
     private static Button StandardButton(string text, bool accent = false)
     {
         var style = new Style(typeof(Button));

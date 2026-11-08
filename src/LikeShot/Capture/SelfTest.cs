@@ -1869,6 +1869,8 @@ public static class SelfTest
             Expect("关于页要写出当前版本号", win.AboutVersionForTest.Contains(versionText));
             Expect("关于页得有「检查更新」可点", win.CheckButtonEnabledForTest);
             Expect("没查到新版时不该露出「下载并安装」", !win.InstallButtonVisibleForTest);
+            log.AppendLine($"GitHub 链接：目标={win.GithubLinkTargetForTest}");
+            Expect("关于页的 GitHub 链接要指向项目仓库", win.GithubLinkTargetForTest == LikeShot.Shell.UpdateChecker.RepoUrl);
 
             win.AutoCheckForTest = !realAutoCheckUpdates;
             bool aboutApplied = win.Apply();
