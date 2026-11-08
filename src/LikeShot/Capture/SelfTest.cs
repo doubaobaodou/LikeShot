@@ -364,6 +364,24 @@ public static class SelfTest
             Expect("关钉图窗要跟着收一次摊（压堆 + 还工作集）",
                 CaptureController.SettlesForTest > settlesBeforePinClose);
 
+            // 6b) 剪贴板出口的次序回归（0.1.30）：点完成要先把截图层收掉、再做复制。
+            // 复制对大图不轻（Flush 要让系统当场把整图按各格式转一遍），层还开着干这个，
+            // 手感就是「点完成卡一下才收屏」。
+            controller.FinishOrderForTest.Clear();
+            controller.BeginCapture();
+            var s4 = controller.SessionForTest;
+            if (s4 != null)
+            {
+                s4.PointerDown(new Point(ox, oy), LeftOrRight.Left);
+                s4.PointerUp(new Point(ox + 160, oy + 120));
+                s4.Finish(CopyMode.Clipboard);
+            }
+            var finishOrder = string.Join("→", controller.FinishOrderForTest);
+            log.AppendLine($"点完成→复制：次序「{finishOrder}」 会话收了={controller.SessionForTest == null} " +
+                           $"剪贴板有图={Clipboard.ContainsImage()}");
+            Expect("点完成要先收截图层、再做复制（层开着复制就是卡一下的根源）", finishOrder == "收层→复制");
+            Expect("剪贴板出口跑完，会话要当场收掉", controller.SessionForTest == null);
+
             // 7) 再标注入口：把一张图丢回截图层，选区就该正好是那张图。
             controller.Abort();
             var replayImage = MakeTestImage(800, 500, Color.FromRgb(0x30, 0x60, 0xF0));

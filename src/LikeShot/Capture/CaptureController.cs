@@ -119,6 +119,9 @@ public sealed class CaptureController
     /// <summary>入库后的自动收摊跑了几回；自检用它断言这条链路活着。</summary>
     internal static int SettlesForTest { get; private set; }
 
+    /// <summary>自检用：剪贴板出口里「收层」和「复制」谁先谁后，按发生顺序记。</summary>
+    internal List<string> FinishOrderForTest { get; } = new();
+
     /// <summary>
     /// Abort 里那次收拾接不到最后一批垃圾：历史入库排在空闲优先级，
     /// PNG 编码、缩略图、剪贴板转位图这些最大块的缓冲都是入库/复制跑起来才分配的。
@@ -152,7 +155,9 @@ public sealed class CaptureController
         // 编辑框还开着就先落字：不然正打一半的字丢了，双击改字时旧字还卡在隐藏态。
         foreach (var overlay in _overlays) overlay.CommitPendingText();
 
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         var image = _session.RenderResult();
+        long renderMs = clock.ElapsedMilliseconds;
         if (image == null)
         {
             Say("选区已经不在屏幕上，没有可导出的图", true, "重新框选", () => _session?.ResetSelection());
@@ -166,13 +171,19 @@ public sealed class CaptureController
         switch (request.Mode)
         {
             case CopyMode.Clipboard:
-                var copyError = Exporter.TryCopyImage(image);
-                if (copyError != null)
-                {
-                    Say($"复制到剪贴板失败：{copyError}", true, "重试复制", () => OnFinish(request));
-                    return;
-                }
+                // 复制对大图不轻：SetImage 之后 Flush 要让系统当场把整图按 DIB/DIBV5 各转一遍，
+                // 剪贴板被别的程序占着时还得重试几轮。以前这些全干完才收截图层，
+                // 手感就是「点完成要等一下才收屏」。所以先把层收掉（收层很轻，当场还屏），
+                // 复制放到层关了以后悄悄做；失败改走托盘气泡，图反正已经排进历史，不会丢。
+                FinishOrderForTest.Add("收层");
                 Abort();
+                long beforeCopy = clock.ElapsedMilliseconds;
+                var copyError = Exporter.TryCopyImage(image);
+                FinishOrderForTest.Add("复制");
+                Log.Write($"完成→复制：出图 {renderMs}ms，收层 {beforeCopy - renderMs}ms，" +
+                          $"剪贴板 {clock.ElapsedMilliseconds - beforeCopy}ms");
+                if (copyError != null)
+                    NotifyProblem("复制到剪贴板失败", $"{copyError}；图已存进历史截图，可以从那里找回");
                 break;
 
             case CopyMode.File:
