@@ -427,6 +427,9 @@ public static class SelfTest
 
             // 10) 热键归属：现在 QQ 在跑吗
             log.AppendLine(HotkeyCheck());
+
+            // 11) 更新检测：tag 解析、版本比较、release JSON 解析。不联网，纯函数直接打。
+            log.AppendLine(UpdateCheckProbe());
         }
         catch (Exception ex)
         {
@@ -1716,6 +1719,7 @@ public static class SelfTest
         int realPoll = App.Config.LongCapturePollMilliseconds;
         int realNotches = App.Config.LongCaptureScrollNotches;
         var realYield = App.Config.YieldToProcesses.ToList();
+        bool realAutoCheckUpdates = App.Config.CheckForUpdates;
         string configPath = App.ConfigPath;
         byte[]? backup = File.Exists(configPath) ? File.ReadAllBytes(configPath) : null;
 
@@ -1782,6 +1786,25 @@ public static class SelfTest
             log.AppendLine($"注入 {testChord}：我们的截图层={took}");
             Expect("改完键位不用重启，注入新键就该由我们接管", took);
             if (took) controller.Abort();
+
+            // 4) 关于页（0.1.26）：版本号要摆出来，检查按钮要在，自动检查开关要能跟着应用落盘。
+            win.SelectSection(LikeShot.UI.SettingsWindow.AboutSectionIndex);
+            string versionText = LikeShot.Shell.UpdateChecker.CurrentVersionText;
+            log.AppendLine($"关于页：版本行「{win.AboutVersionForTest}」 更新状态「{win.UpdateStatusForTest}」 " +
+                           $"检查按钮可用={win.CheckButtonEnabledForTest} 安装按钮露出={win.InstallButtonVisibleForTest}");
+            Expect("关于页要写出当前版本号", win.AboutVersionForTest.Contains(versionText));
+            Expect("关于页得有「检查更新」可点", win.CheckButtonEnabledForTest);
+            Expect("没查到新版时不该露出「下载并安装」", !win.InstallButtonVisibleForTest);
+
+            win.AutoCheckForTest = !realAutoCheckUpdates;
+            bool aboutApplied = win.Apply();
+            string diskAfterAbout = File.ReadAllText(configPath);
+            log.AppendLine($"自动检查开关：内存={App.Config.CheckForUpdates} 磁盘含新值={diskAfterAbout.Contains($"\"CheckForUpdates\": {(!realAutoCheckUpdates).ToString().ToLower()}")}");
+            Expect("自动检查开关应用后要写进内存配置", aboutApplied && App.Config.CheckForUpdates == !realAutoCheckUpdates);
+            Expect("自动检查开关应用后要写进磁盘配置", diskAfterAbout.Contains("\"CheckForUpdates\""));
+            App.Config.CheckForUpdates = realAutoCheckUpdates;
+            win.AutoCheckForTest = realAutoCheckUpdates;
+            win.Apply();
         }
         catch (Exception ex)
         {
@@ -1797,6 +1820,7 @@ public static class SelfTest
             App.Config.LongCapturePollMilliseconds = realPoll;
             App.Config.LongCaptureScrollNotches = realNotches;
             App.Config.YieldToProcesses = realYield;
+            App.Config.CheckForUpdates = realAutoCheckUpdates;
             AppConfig.Save(App.Config);
             if (backup != null) File.WriteAllBytes(configPath, backup);
             if (Application.Current is App app) app.ReloadHotkey();
@@ -1826,7 +1850,8 @@ public static class SelfTest
     public static async void ShowSettings()
     {
         var args = Environment.GetCommandLineArgs();
-        int section = args.Contains("--historyui") ? LikeShot.UI.SettingsWindow.HistorySectionIndex : 0;
+        int section = args.Contains("--historyui") ? LikeShot.UI.SettingsWindow.HistorySectionIndex
+            : args.Contains("--aboutui") ? LikeShot.UI.SettingsWindow.AboutSectionIndex : 0;
 
         if (args.Contains("--seedhistory"))
         {
@@ -2002,5 +2027,57 @@ public static class SelfTest
                $"QQ进程={qq} TIM进程={tim} 键位={chord.Text} 我们自己挂着注册={ours} " +
                $"托盘那句状态=「{arbiter?.StatusText ?? "仲裁器没起来"}」 " +
                $"判定明细={arbiter?.YieldDiagForTest ?? "无"}";
+    }
+
+    /// <summary>
+    /// 更新检测的纯函数探针（0.1.26）：tag 怎么认、版本怎么比、release JSON 怎么拆。
+    /// 不联网——联网那条路在真机上点「检查更新」验，这里守住「认得出、比得对」。
+    /// </summary>
+    private static string UpdateCheckProbe()
+    {
+        var sb = new StringBuilder();
+
+        var v126 = LikeShot.Shell.UpdateChecker.ParseVersion("v0.1.26");
+        var vHash = LikeShot.Shell.UpdateChecker.ParseVersion("0.1.26+d94ae3feb5aba51b8d452d63951623de1c5c249f");
+        var vBare = LikeShot.Shell.UpdateChecker.ParseVersion("0.1.26");
+        var vJunk = LikeShot.Shell.UpdateChecker.ParseVersion("latest");
+        var vEmpty = LikeShot.Shell.UpdateChecker.ParseVersion("");
+        sb.AppendLine($"tag 解析：v0.1.26={v126} 带hash={vHash} 裸版本={vBare} 乱写的={vJunk?.ToString() ?? "null"} 空={vEmpty?.ToString() ?? "null"}");
+        Expect("带 v 前缀的 tag 要认得", v126 == new Version(0, 1, 26));
+        Expect("打包嵌的 git hash 要剥掉再认", vHash == new Version(0, 1, 26));
+        Expect("裸版本号也要认得", vBare == new Version(0, 1, 26));
+        Expect("认不出的文字要给 null，不能瞎猜一个版本", vJunk == null && vEmpty == null);
+
+        var current = new Version(0, 1, 26);
+        ExpectSame("0.1.27 比 0.1.26 新", LikeShot.Shell.UpdateChecker.IsNewer(new Version(0, 1, 27), current), true);
+        ExpectSame("0.1.9 不比 0.1.10 新（按段比，不是按字符串）", LikeShot.Shell.UpdateChecker.IsNewer(new Version(0, 1, 9), new Version(0, 1, 10)), false);
+        ExpectSame("相等不提示", LikeShot.Shell.UpdateChecker.IsNewer(current, current), false);
+        ExpectSame("更旧不提示", LikeShot.Shell.UpdateChecker.IsNewer(new Version(0, 1, 25), current), false);
+        ExpectSame("0.2.0 比 0.1.26 新", LikeShot.Shell.UpdateChecker.IsNewer(new Version(0, 2, 0), current), true);
+        ExpectSame("缺段按 0 算：0.1 和 0.1.0 相等", LikeShot.Shell.UpdateChecker.IsNewer(new Version(0, 1), new Version(0, 1, 0)), false);
+
+        const string json = """
+            {
+              "tag_name": "v0.1.27",
+              "html_url": "https://github.com/doubaobaodou/LikeShot/releases/tag/v0.1.27",
+              "assets": [
+                { "name": "LikeShot-0.1.27-win-x64-portable.zip", "browser_download_url": "https://github.com/doubaobaodou/LikeShot/releases/download/v0.1.27/LikeShot-0.1.27-win-x64-portable.zip" },
+                { "name": "LikeShot-0.1.27-win-x64-setup.exe", "browser_download_url": "https://github.com/doubaobaodou/LikeShot/releases/download/v0.1.27/LikeShot-0.1.27-win-x64-setup.exe" }
+              ]
+            }
+            """;
+        var release = LikeShot.Shell.UpdateChecker.ParseLatest(json);
+        sb.AppendLine($"release JSON：tag={release?.Tag} 版本={release?.VersionText} 页面={release?.PageUrl} 安装器={release?.SetupName}");
+        Expect("release JSON 要解析出版本", release?.Version == new Version(0, 1, 27));
+        Expect("页面地址要从 html_url 拿", release?.PageUrl == "https://github.com/doubaobaodou/LikeShot/releases/tag/v0.1.27");
+        Expect("安装器资产要挑 -setup.exe，不能抓成 zip", release?.SetupName == "LikeShot-0.1.27-win-x64-setup.exe");
+        Expect("安装器下载地址要拿对", release?.SetupUrl == "https://github.com/doubaobaodou/LikeShot/releases/download/v0.1.27/LikeShot-0.1.27-win-x64-setup.exe");
+        ExpectSame("坏 JSON 要给 null", LikeShot.Shell.UpdateChecker.ParseLatest("{不是JSON"), (LikeShot.Shell.UpdateChecker.ReleaseInfo?)null);
+        ExpectSame("没有 tag_name 要给 null", LikeShot.Shell.UpdateChecker.ParseLatest("""{"assets":[]}"""), (LikeShot.Shell.UpdateChecker.ReleaseInfo?)null);
+
+        var now = LikeShot.Shell.UpdateChecker.CurrentVersion;
+        sb.AppendLine($"当前进程版本={now}（三段 {LikeShot.Shell.UpdateChecker.CurrentVersionText}）");
+        Expect("当前版本要从 exe 里读出三段，不能是 0.0.0", now.Major + now.Minor + now.Build > 0);
+        return sb.ToString();
     }
 }

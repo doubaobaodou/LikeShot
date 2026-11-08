@@ -34,6 +34,9 @@ public sealed class AppConfig
     /// <summary>历史截图最多留几张；收藏的那几张不参与淘汰。</summary>
     public int HistoryLimit { get; set; } = 200;
 
+    /// <summary>启动时和每 6 小时去 GitHub 看一眼有没有新版；关掉后手动检查仍可用。</summary>
+    public bool CheckForUpdates { get; set; } = true;
+
     [JsonIgnore]
     public static JsonSerializerOptions Options { get; } = new()
     {

@@ -30,6 +30,7 @@ public sealed class TrayIcon : IDisposable
     private readonly ContextMenu _menu;
     private readonly MenuItem _captureItem, _statusItem, _autostartItem;
     private bool _disposed;
+    private bool _balloonIsUpdate;
 
     public TrayIcon(CaptureController controller, AppConfig config, Func<string> statusProvider)
     {
@@ -41,7 +42,7 @@ public sealed class TrayIcon : IDisposable
         {
             Icon = BuildIcon(),
             Visible = true,
-            Text = "LikeShot 截图"
+            Text = $"LikeShot 截图 {UpdateChecker.CurrentVersionText}"
         };
         _icon.DoubleClick += (_, _) => BeginCapture();
         // 右键弹自己画的 WPF 菜单：WinForms 的 ContextMenuStrip 样式没救，托盘事件留在这里收。
@@ -49,12 +50,19 @@ public sealed class TrayIcon : IDisposable
         {
             if (e.Button == WF.MouseButtons.Right) ShowMenu();
         };
+        _icon.BalloonTipClicked += (_, _) =>
+        {
+            if (_balloonIsUpdate) Application.Current.Dispatcher.Invoke(() => App.OpenSettings(UI.SettingsWindow.AboutSectionIndex));
+        };
 
         _captureItem = MenuCard.Item("camera", "截图", accentIcon: true);
         _captureItem.Click += (_, _) => BeginCapture();
 
         var settings = MenuCard.Item("gear", "设置…",
             () => Application.Current.Dispatcher.Invoke(() => App.OpenSettings()));
+
+        var update = MenuCard.Item("refresh", "检查更新…",
+            () => Application.Current.Dispatcher.Invoke(() => App.OpenSettings(UI.SettingsWindow.AboutSectionIndex)));
 
         var history = MenuCard.Item("history", "历史截图…",
             () => Application.Current.Dispatcher.Invoke(
@@ -86,6 +94,7 @@ public sealed class TrayIcon : IDisposable
         _menu.Items.Add(_captureItem);
         _menu.Items.Add(MenuCard.Sep());
         _menu.Items.Add(settings);
+        _menu.Items.Add(update);
         _menu.Items.Add(history);
         _menu.Items.Add(folder);
         _menu.Items.Add(_autostartItem);
@@ -136,13 +145,24 @@ public sealed class TrayIcon : IDisposable
 
     public void NotifySaved(string path)
     {
+        _balloonIsUpdate = false;
         _icon.ShowBalloonTip(1200, "截图已保存", Path.GetFileName(path), WF.ToolTipIcon.Info);
     }
 
     /// <summary>界面已经关掉、没地方挂回执的失败才走气泡；能挂在截图层里的失败别用这条。</summary>
     public void NotifyProblem(string title, string message)
     {
+        _balloonIsUpdate = false;
         _icon.ShowBalloonTip(3000, title, message, WF.ToolTipIcon.Warning);
+    }
+
+    /// <summary>发现新版：气泡提一次，点进气泡直接落在「关于」页，那里能下载并安装。</summary>
+    public void NotifyUpdate(UpdateChecker.ReleaseInfo release)
+    {
+        _balloonIsUpdate = true;
+        _icon.ShowBalloonTip(5000, "LikeShot 有新版",
+            $"{release.VersionText} 已发布（当前 {UpdateChecker.CurrentVersionText}），点这条气泡去更新",
+            WF.ToolTipIcon.Info);
     }
 
     private static DIcon BuildIcon()

@@ -1,3 +1,4 @@
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -31,6 +32,7 @@ public sealed partial class SettingsWindow : Window
     private readonly CheckBox _magnifier = Check();
     private readonly CheckBox _copyAfterSave = Check();
     private readonly CheckBox _autoStart = Check();
+    private readonly CheckBox _checkUpdates = Check();
     private readonly TextBlock _status = new()
     {
         FontSize = 12,
@@ -48,6 +50,24 @@ public sealed partial class SettingsWindow : Window
 
     private readonly List<NavItem> _navItems = [];
     private readonly List<FrameworkElement> _pages = [];
+
+    internal const int AboutSectionIndex = 6;
+
+    private readonly TextBlock _aboutVersion = new()
+    {
+        FontSize = 12,
+        Foreground = Theme.Brush(SettingsTheme.TextSecondary),
+        Margin = new Thickness(0, 2, 0, 0)
+    };
+    private readonly TextBlock _updateStatus = new()
+    {
+        FontSize = 12,
+        TextWrapping = TextWrapping.Wrap,
+        Foreground = Theme.Brush(SettingsTheme.TextSecondary),
+        Margin = new Thickness(0, 2, 0, 0)
+    };
+    private Button? _checkButton, _installButton, _releasePageButton;
+    private bool _downloading;
 
     public SettingsWindow(AppConfig config)
     {
@@ -83,9 +103,18 @@ public sealed partial class SettingsWindow : Window
         _historyLimit.Changed += MarkDirty;
         _autoStart.Checked += (_, _) => MarkDirty();
         _autoStart.Unchecked += (_, _) => MarkDirty();
+        _checkUpdates.Checked += (_, _) => MarkDirty();
+        _checkUpdates.Unchecked += (_, _) => MarkDirty();
 
         LoadFrom(config);
         SwitchSection(0);
+
+        if (App.Updates is { } updates)
+        {
+            updates.Changed += RefreshUpdateUi;
+            Closed += (_, _) => updates.Changed -= RefreshUpdateUi;
+        }
+        RefreshUpdateUi();
     }
 
     /// <summary>把控件填成配置里的值。</summary>
@@ -102,6 +131,7 @@ public sealed partial class SettingsWindow : Window
         _captureTheme.Select(config.CaptureUiTheme);
         _historyLimit.Select(config.HistoryLimit);
         _autoStart.IsChecked = Shell.AutoStart.IsEnabled();
+        _checkUpdates.IsChecked = config.CheckForUpdates;
 
         RefreshChordHint();
         RefreshFileName();
@@ -132,6 +162,7 @@ public sealed partial class SettingsWindow : Window
         _config.CopyAfterSave = _copyAfterSave.IsChecked == true;
         _config.CaptureUiTheme = _captureTheme.Selected;
         _config.HistoryLimit = _historyLimit.Selected;
+        _config.CheckForUpdates = _checkUpdates.IsChecked == true;
         Theme.LightUi = _captureTheme.Selected == "light";
 
         var dir = _saveDir.Text.Trim();
@@ -159,7 +190,7 @@ public sealed partial class SettingsWindow : Window
         Log.Write($"设置已应用 热键={_config.CaptureChord} 让位={string.Join(",", _config.YieldToProcesses)} " +
                   $"格式={_config.SaveFormat} 间隔={_config.LongCapturePollMilliseconds}ms 每帧{_config.LongCaptureScrollNotches}格 " +
                   $"放大镜={_config.ShowMagnifier} 存后复制={_config.CopyAfterSave} 配色={_config.CaptureUiTheme} " +
-                  $"自启={_config.RunOnStartup} 历史留={_config.HistoryLimit}张 顺手删掉={pruned}张");
+                  $"自启={_config.RunOnStartup} 历史留={_config.HistoryLimit}张 自动检查更新={_config.CheckForUpdates} 顺手删掉={pruned}张");
         _status.Text = pruned > 0
             ? $"已应用 {DateTime.Now:HH:mm:ss}，并按新的保留数量删掉 {pruned} 张最旧的"
             : $"已应用 {DateTime.Now:HH:mm:ss}";
@@ -175,6 +206,11 @@ public sealed partial class SettingsWindow : Window
     internal void SelectSaveDirForTest() => _saveDir.SelectAll();
     internal string StatusForTest => _status.Text;
     internal string ChordHintForTest => _chordHint.Text;
+    internal string AboutVersionForTest => _aboutVersion.Text;
+    internal string UpdateStatusForTest => _updateStatus.Text;
+    internal bool CheckButtonEnabledForTest => _checkButton?.IsEnabled == true;
+    internal bool InstallButtonVisibleForTest => _installButton?.Visibility == Visibility.Visible;
+    internal bool AutoCheckForTest { get => _checkUpdates.IsChecked == true; set => _checkUpdates.IsChecked = value; }
     internal void PickForTest(string format, int poll, int notches)
     {
         _format.Select(format);
@@ -254,6 +290,7 @@ public sealed partial class SettingsWindow : Window
             ("长截图", "\uE81E", BuildLongPage, true),
             ("历史截图", "\uE823", BuildHistoryPage, false),
             ("启动", "\uE7E8", BuildStartupPage, true),
+            ("关于", "\uE946", BuildAboutPage, true),
         };
 
         var nav = new StackPanel { Margin = new Thickness(8, 10, 8, 8) };
@@ -407,6 +444,154 @@ public sealed partial class SettingsWindow : Window
 
     private UIElement BuildStartupPage() => Page("启动", Card(
         Row("开机自动启动", Desc("登录 Windows 后自动运行 LikeShot"), _autoStart)));
+
+    private UIElement BuildAboutPage()
+    {
+        _aboutVersion.Text = $"版本 {Shell.UpdateChecker.CurrentVersionText}";
+
+        var identity = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        identity.Children.Add(new TextBlock
+        {
+            Text = "LikeShot 截图",
+            FontSize = 15,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = Theme.Brush(SettingsTheme.TextPrimary)
+        });
+        identity.Children.Add(_aboutVersion);
+
+        var identityRow = new StackPanel { Orientation = Orientation.Horizontal };
+        if (Icon is BitmapSource logo)
+        {
+            identityRow.Children.Add(new Image
+            {
+                Source = logo,
+                Width = 40,
+                Height = 40,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 14, 0)
+            });
+        }
+        identityRow.Children.Add(identity);
+
+        var identityCard = new Border
+        {
+            Background = Theme.Brush(SettingsTheme.Card),
+            BorderBrush = Theme.Brush(SettingsTheme.CardBorder),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(16, 14, 16, 14),
+            Child = identityRow
+        };
+
+        _checkButton = StandardButton("检查更新");
+        _checkButton.Click += (_, _) => _ = App.Updates?.CheckAsync(manual: true);
+
+        _installButton = StandardButton("下载并安装", accent: true);
+        _installButton.Click += (_, _) => _ = DownloadAndInstallAsync();
+        _installButton.Visibility = Visibility.Collapsed;
+
+        _releasePageButton = StandardButton("打开下载页");
+        _releasePageButton.Click += (_, _) => App.Updates?.OpenReleasePage();
+        _releasePageButton.Visibility = Visibility.Collapsed;
+
+        var actions = new StackPanel { Orientation = Orientation.Horizontal };
+        actions.Children.Add(_checkButton);
+        actions.Children.Add(new Border { Width = 6 });
+        actions.Children.Add(_installButton);
+        actions.Children.Add(new Border { Width = 6 });
+        actions.Children.Add(_releasePageButton);
+
+        var updateCard = Card(
+            Row("软件更新", _updateStatus, actions),
+            Sep(),
+            Row("自动检查更新", Desc("启动时和之后每 6 小时去 GitHub 看一眼有没有新版"), _checkUpdates));
+
+        return Page("关于", identityCard, updateCard,
+            Caption("开源项目，源码和历代版本都在 GitHub 上。"));
+    }
+
+    /// <summary>把更新检测的状态翻成「下一步点哪」：状态挂在按钮旁边，不报字段。</summary>
+    private void RefreshUpdateUi()
+    {
+        if (_checkButton == null) return;
+        var updates = App.Updates;
+        if (updates == null)
+        {
+            _updateStatus.Text = "更新检测没在跑";
+            _checkButton.IsEnabled = false;
+            return;
+        }
+
+        bool downloading = _downloading;
+        _checkButton.IsEnabled = !downloading && updates.Status != Shell.UpdateChecker.State.Checking;
+        if (_installButton != null)
+        {
+            _installButton.Visibility = updates.Status == Shell.UpdateChecker.State.UpdateAvailable ? Visibility.Visible : Visibility.Collapsed;
+            _installButton.IsEnabled = !downloading;
+        }
+        if (_releasePageButton != null)
+            _releasePageButton.Visibility = _installButton?.Visibility ?? Visibility.Collapsed;
+
+        switch (updates.Status)
+        {
+            case Shell.UpdateChecker.State.Checking:
+                _updateStatus.Text = "正在检查更新…";
+                _updateStatus.Foreground = Theme.Brush(SettingsTheme.TextSecondary);
+                break;
+            case Shell.UpdateChecker.State.UpToDate:
+                _updateStatus.Text = $"已是最新版本（{Shell.UpdateChecker.CurrentVersionText}）";
+                _updateStatus.Foreground = Theme.Brush(SettingsTheme.Good);
+                break;
+            case Shell.UpdateChecker.State.UpdateAvailable:
+                _updateStatus.Text = $"发现新版本 {updates.Latest!.VersionText}（当前 {Shell.UpdateChecker.CurrentVersionText}）";
+                _updateStatus.Foreground = Theme.Brush(SettingsTheme.Accent);
+                break;
+            case Shell.UpdateChecker.State.Failed:
+                _updateStatus.Text = $"没查成：{updates.Error}。点「检查更新」重试";
+                _updateStatus.Foreground = Theme.Brush(SettingsTheme.Warn);
+                break;
+            default:
+                _updateStatus.Text = "点「检查更新」看看有没有新版本";
+                _updateStatus.Foreground = Theme.Brush(SettingsTheme.TextSecondary);
+                break;
+        }
+    }
+
+    private async Task DownloadAndInstallAsync()
+    {
+        if (_downloading || App.Updates is not { } updates || _installButton == null) return;
+        _downloading = true;
+        _installButton.IsEnabled = false;
+        _checkButton!.IsEnabled = false;
+        _updateStatus.Foreground = Theme.Brush(SettingsTheme.TextSecondary);
+        try
+        {
+            string? error = await updates.DownloadAndRunAsync(fraction =>
+                Dispatcher.BeginInvoke(() =>
+                {
+                    _updateStatus.Text = $"正在下载新版本… {fraction * 100:0}%";
+                    _installButton.Content = $"下载中 {fraction * 100:0}%";
+                }));
+            if (error != null)
+            {
+                _updateStatus.Text = error;
+                _updateStatus.Foreground = Theme.Brush(SettingsTheme.Bad);
+                _installButton.Content = "下载并安装";
+            }
+            else
+            {
+                _updateStatus.Text = "安装程序已启动，按向导走完就是新版本";
+                _updateStatus.Foreground = Theme.Brush(SettingsTheme.Good);
+                _installButton.Content = "下载并安装";
+            }
+        }
+        finally
+        {
+            _downloading = false;
+            _installButton.IsEnabled = true;
+            RefreshUpdateUi();
+        }
+    }
 
     // ---- 小构件 ----
 

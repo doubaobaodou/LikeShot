@@ -16,6 +16,9 @@ public partial class App : Application
 
     public static AppConfig Config { get; private set; } = new();
 
+    /// <summary>更新检测：托盘气泡、关于页、托盘菜单都读它。</summary>
+    internal static UpdateChecker? Updates { get; private set; }
+
     /// <summary>设置页要驱动的截图动作（把历史图钉出去、丢回截图层）都走这个总控。</summary>
     internal CaptureController? Controller => _controller;
 
@@ -77,6 +80,11 @@ public partial class App : Application
         _arbiter = new HotkeyArbiter(Config, () => _controller.BeginCapture());
         _arbiter.Start();
         Arbiter = _arbiter;
+
+        Updates = new UpdateChecker(Config);
+        Updates.UpdateFound += release => _tray?.NotifyUpdate(release);
+        // 自检、抓屏这些一次性进程不联网检查更新；只有常驻实例才启动时查一次。
+        if (!oneShot) Updates.Start();
 
         // 托盘常驻的轻量软件，闲置时把工作集还给系统（截图收摊时也会还一次）。
         Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, () =>
