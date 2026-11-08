@@ -116,9 +116,11 @@ public sealed class TrayIcon : IDisposable
             if (_menu.IsOpen) { _menu.IsOpen = false; return; }
             _menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
             _menu.IsOpen = true;
-            // 从托盘弹出时没有一个被激活的宿主窗口，WPF 默认的「点菜单外面就关」
-            // 不会生效——菜单会一直挂着，只能再点一次托盘。自己把鼠标捕获拿过来，
-            // 之后任何一次菜单外的按下都会触发 MenuBase 的关单逻辑。
+            // 系统有「前台锁」：后台进程拿不住鼠标捕获，而 Popup 的「点外面收起」
+            // 正靠那份捕获——托盘弹菜单时我们在后台，捕获落空，菜单就挂着不收。
+            // 先把菜单的弹出窗顶到前台再捕获，外点才走得到收单逻辑。
+            if (System.Windows.PresentationSource.FromVisual(_menu) is System.Windows.Interop.HwndSource src)
+                LikeShot.Native.Win32.ForceForeground(src.Handle);
             System.Windows.Input.Mouse.Capture(_menu, System.Windows.Input.CaptureMode.SubTree);
         });
     }

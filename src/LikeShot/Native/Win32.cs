@@ -227,6 +227,11 @@ internal static class Win32
     [DllImport("user32.dll")]
     public static extern void mouse_event(uint dwFlags, uint dx, uint dy, int data, UIntPtr extraInfo);
 
+    public const uint MOUSEEVENTF_MOVE = 0x0001;
+    public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+    public const uint MOUSEEVENTF_LEFTUP = 0x0004;
+    public const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
+
     [DllImport("user32.dll")]
     public static extern nint WindowFromPoint(POINT point);
 

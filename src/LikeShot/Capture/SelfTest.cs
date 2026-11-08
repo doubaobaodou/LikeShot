@@ -1451,6 +1451,60 @@ public static class SelfTest
                 log.AppendLine("托盘菜单：拿不到托盘");
                 Expect("托盘菜单要拿得到", false);
             }
+
+            // 5) 外点收起回归（0.1.27）：用户正用别的 app 时右键托盘弹菜单，点外面必须收。
+            //    先把别的进程顶到前台复现「我们在后台」的场景，再注入真左键点它标题栏（无害位置）。
+            win?.Close();
+            win = null;
+            if (App.Current is App app2 && app2.TrayForTest is { } tray2)
+            {
+                nint other = nint.Zero;
+                foreach (var proc in Process.GetProcesses())
+                {
+                    if (proc.Id == Environment.ProcessId) continue;
+                    try
+                    {
+                        nint h = proc.MainWindowHandle;
+                        if (h != nint.Zero && LikeShot.Native.Win32.IsWindowVisible(h)) { other = h; break; }
+                    }
+                    catch
+                    {
+                        // 受保护进程拿不到主窗口，跳过。
+                    }
+                }
+                if (other == nint.Zero) log.AppendLine("外点收起：桌面上没别的可见窗口，跳过");
+                else
+                {
+                    LikeShot.Native.Win32.ForceForeground(other);
+                    await Task.Delay(250);
+                    MoveMousePhysical(d.Bounds.X + 120, d.Bounds.Y + 120);
+                    tray2.ShowMenuForTest();
+                    await Task.Delay(300);
+                    bool openBefore = tray2.MenuForTest.IsOpen;
+                    LikeShot.Native.Win32.GetWindowRect(other, out var otherRect);
+                    ClickMousePhysical(otherRect.Left + otherRect.Width / 2, otherRect.Top + 8);
+                    await Task.Delay(500);
+                    bool openAfter = tray2.MenuForTest.IsOpen;
+                    log.AppendLine($"外点收起：点前菜单开着={openBefore}，点别的窗口标题栏后还开着={openAfter}");
+                    Expect("托盘菜单弹出后，点外面要收起来", openBefore && !openAfter);
+                    if (openAfter) tray2.MenuForTest.IsOpen = false;
+
+                    // 收外点不能把菜单项自己点坏：真点「截图」项，菜单要收、截图层要起来。
+                    MoveMousePhysical(d.Bounds.X + 120, d.Bounds.Y + 120);
+                    tray2.ShowMenuForTest();
+                    await Task.Delay(300);
+                    var firstItem = (MenuItem)tray2.MenuForTest.Items[0];
+                    var itemPoint = firstItem.PointToScreen(new Point(firstItem.ActualWidth / 2, firstItem.ActualHeight / 2));
+                    ClickMousePhysical((int)itemPoint.X, (int)itemPoint.Y);
+                    await Task.Delay(400);
+                    bool itemClosed = !tray2.MenuForTest.IsOpen;
+                    bool captureUp = controller.SessionForTest != null;
+                    log.AppendLine($"真点菜单项：菜单收起={itemClosed} 截图层起来={captureUp}");
+                    Expect("真点「截图」菜单项要收起菜单并起截图层", itemClosed && captureUp);
+                    if (captureUp) controller.Abort();
+                    if (!itemClosed) tray2.MenuForTest.IsOpen = false;
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -1473,6 +1527,23 @@ public static class SelfTest
     {
         Expect($"{what}渲染得出图（{renderResult}）", !renderResult.Contains("不对"));
         Expect($"{what}里有菜单项（实得 {items} 项）", items > 0);
+    }
+
+    /// <summary>注入真鼠标移动（物理坐标）：外点收起探针要走系统输入，不能用会话级假事件。</summary>
+    private static void MoveMousePhysical(int x, int y)
+    {
+        var vs = System.Windows.Forms.SystemInformation.VirtualScreen;
+        uint ax = (uint)Math.Clamp((x - vs.Left) * 65535 / Math.Max(1, vs.Width - 1), 0, 65535);
+        uint ay = (uint)Math.Clamp((y - vs.Top) * 65535 / Math.Max(1, vs.Height - 1), 0, 65535);
+        LikeShot.Native.Win32.mouse_event(
+            LikeShot.Native.Win32.MOUSEEVENTF_MOVE | LikeShot.Native.Win32.MOUSEEVENTF_ABSOLUTE, ax, ay, 0, UIntPtr.Zero);
+    }
+
+    private static void ClickMousePhysical(int x, int y)
+    {
+        MoveMousePhysical(x, y);
+        LikeShot.Native.Win32.mouse_event(LikeShot.Native.Win32.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
+        LikeShot.Native.Win32.mouse_event(LikeShot.Native.Win32.MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
     }
 
     /// <summary>
