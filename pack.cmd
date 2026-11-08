@@ -15,7 +15,7 @@ rem ---------------------------------------------------------------------------
 cd /d "%~dp0"
 
 set VER=%1
-if "%VER%"=="" set VER=0.1.25
+if "%VER%"=="" set VER=0.1.26
 
 echo [1/4] publishing self-contained single-file exe (this takes a minute) ...
 dotnet publish src\LikeShot\LikeShot.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o build\singlefile
