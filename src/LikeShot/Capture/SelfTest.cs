@@ -79,7 +79,10 @@ public static class SelfTest
         Directory.CreateDirectory(dir);
 
         // 自检期间整库改道到 Temp：不然跑一轮就在他的真实历史里塞十几张测试图。
-        var store = HistoryStore.UseRootForTest(Path.Combine(dir, "history"));
+        // 每轮先清空：库攒到上限后入库会当场淘汰一条，「新增」恒 0，钉图入库探针就误报了。
+        string historyRoot = Path.Combine(dir, "history");
+        if (Directory.Exists(historyRoot)) Directory.Delete(historyRoot, true);
+        var store = HistoryStore.UseRootForTest(historyRoot);
         int limitWas = App.Config.HistoryLimit;
 
         try
