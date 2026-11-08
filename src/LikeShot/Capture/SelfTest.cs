@@ -2104,7 +2104,7 @@ public static class SelfTest
     }
 
     /// <summary>
-    /// 更新检测的纯函数探针（0.1.26）：tag 怎么认、版本怎么比、release JSON 怎么拆。
+    /// 更新检测的纯函数探针（0.1.26）：tag 怎么认、版本怎么比、重定向地址怎么拆。
     /// 不联网——联网那条路在真机上点「检查更新」验，这里守住「认得出、比得对」。
     /// </summary>
     private static string UpdateCheckProbe()
@@ -2130,24 +2130,16 @@ public static class SelfTest
         ExpectSame("0.2.0 比 0.1.26 新", LikeShot.Shell.UpdateChecker.IsNewer(new Version(0, 2, 0), current), true);
         ExpectSame("缺段按 0 算：0.1 和 0.1.0 相等", LikeShot.Shell.UpdateChecker.IsNewer(new Version(0, 1), new Version(0, 1, 0)), false);
 
-        const string json = """
-            {
-              "tag_name": "v0.1.27",
-              "html_url": "https://github.com/doubaobaodou/LikeShot/releases/tag/v0.1.27",
-              "assets": [
-                { "name": "LikeShot-0.1.27-win-x64-portable.zip", "browser_download_url": "https://github.com/doubaobaodou/LikeShot/releases/download/v0.1.27/LikeShot-0.1.27-win-x64-portable.zip" },
-                { "name": "LikeShot-0.1.27-win-x64-setup.exe", "browser_download_url": "https://github.com/doubaobaodou/LikeShot/releases/download/v0.1.27/LikeShot-0.1.27-win-x64-setup.exe" }
-              ]
-            }
-            """;
-        var release = LikeShot.Shell.UpdateChecker.ParseLatest(json);
-        sb.AppendLine($"release JSON：tag={release?.Tag} 版本={release?.VersionText} 页面={release?.PageUrl} 安装器={release?.SetupName}");
-        Expect("release JSON 要解析出版本", release?.Version == new Version(0, 1, 27));
-        Expect("页面地址要从 html_url 拿", release?.PageUrl == "https://github.com/doubaobaodou/LikeShot/releases/tag/v0.1.27");
-        Expect("安装器资产要挑 -setup.exe，不能抓成 zip", release?.SetupName == "LikeShot-0.1.27-win-x64-setup.exe");
+        var release = LikeShot.Shell.UpdateChecker.ParseLatestPage(
+            new Uri("https://github.com/doubaobaodou/LikeShot/releases/tag/v0.1.27"));
+        sb.AppendLine($"releases 页重定向：tag={release?.Tag} 版本={release?.VersionText} 页面={release?.PageUrl} 安装器={release?.SetupName}");
+        Expect("重定向地址要解析出版本", release?.Version == new Version(0, 1, 27));
+        Expect("页面地址就是重定向后的地址", release?.PageUrl == "https://github.com/doubaobaodou/LikeShot/releases/tag/v0.1.27");
+        Expect("安装器名按约定拼，不能拼成 zip", release?.SetupName == "LikeShot-0.1.27-win-x64-setup.exe");
         Expect("安装器下载地址要拿对", release?.SetupUrl == "https://github.com/doubaobaodou/LikeShot/releases/download/v0.1.27/LikeShot-0.1.27-win-x64-setup.exe");
-        ExpectSame("坏 JSON 要给 null", LikeShot.Shell.UpdateChecker.ParseLatest("{不是JSON"), (LikeShot.Shell.UpdateChecker.ReleaseInfo?)null);
-        ExpectSame("没有 tag_name 要给 null", LikeShot.Shell.UpdateChecker.ParseLatest("""{"assets":[]}"""), (LikeShot.Shell.UpdateChecker.ReleaseInfo?)null);
+        ExpectSame("没重定向到 tag 的地址要给 null", LikeShot.Shell.UpdateChecker.ParseLatestPage(new Uri("https://github.com/doubaobaodou/LikeShot/releases")), (LikeShot.Shell.UpdateChecker.ReleaseInfo?)null);
+        ExpectSame("乱写的 tag 要给 null", LikeShot.Shell.UpdateChecker.ParseLatestPage(new Uri("https://github.com/doubaobaodou/LikeShot/releases/tag/latest")), (LikeShot.Shell.UpdateChecker.ReleaseInfo?)null);
+        ExpectSame("没有地址要给 null", LikeShot.Shell.UpdateChecker.ParseLatestPage(null), (LikeShot.Shell.UpdateChecker.ReleaseInfo?)null);
 
         var now = LikeShot.Shell.UpdateChecker.CurrentVersion;
         sb.AppendLine($"当前进程版本={now}（三段 {LikeShot.Shell.UpdateChecker.CurrentVersionText}）");

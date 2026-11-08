@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
-using System.Text.Json;
 using System.Threading.Tasks;
 
 namespace LikeShot.Shell;
@@ -14,7 +13,9 @@ namespace LikeShot.Shell;
 public sealed class UpdateChecker
 {
     public const string RepoUrl = "https://github.com/doubaobaodou/LikeShot";
-    private const string LatestApiUrl = "https://api.github.com/repos/doubaobaodou/LikeShot/releases/latest";
+    // 不走 api.github.com：匿名接口每 IP 每小时 60 次，代理出口 IP 一堆人共用，
+    // 配额常被别人用光（403）。releases 网页没这条规矩，latest 会重定向到最新 tag 页。
+    private const string LatestPageUrl = $"{RepoUrl}/releases/latest";
 
     public enum State { Idle, Checking, UpToDate, UpdateAvailable, Failed }
 
@@ -62,7 +63,6 @@ public sealed class UpdateChecker
             Timeout = TimeSpan.FromSeconds(15)
         };
         client.DefaultRequestHeaders.UserAgent.ParseAdd("LikeShot-update-check");
-        client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         return client;
     }
 
@@ -83,12 +83,13 @@ public sealed class UpdateChecker
         try
         {
             SetStatus(State.Checking, null);
-            var json = await Http.GetStringAsync(LatestApiUrl);
-            var release = ParseLatest(json);
+            using var resp = await Http.GetAsync(LatestPageUrl, HttpCompletionOption.ResponseHeadersRead);
+            resp.EnsureSuccessStatusCode();
+            var release = ParseLatestPage(resp.RequestMessage?.RequestUri);
             if (release == null)
             {
-                SetStatus(State.Failed, "GitHub 返回的内容认不出来");
-                Log.Write("更新检查：release JSON 解析失败");
+                SetStatus(State.Failed, "没从 GitHub 读到最新版本号");
+                Log.Write("更新检查：releases 页重定向地址里认不出 tag");
                 return;
             }
 
@@ -120,10 +121,9 @@ public sealed class UpdateChecker
     {
         TaskCanceledException => "连接 GitHub 超时（15 秒）",
         HttpRequestException h when h.StatusCode == System.Net.HttpStatusCode.Forbidden =>
-            "GitHub 拒绝了请求（403，可能是接口限流，过会儿再试）",
+            "GitHub 拒绝了请求（403，过会儿再试）",
         HttpRequestException h when h.StatusCode != null => $"GitHub 返回 {(int)h.StatusCode}",
         HttpRequestException => "连不上 GitHub（检查网络或代理）",
-        JsonException => "GitHub 返回的内容认不出来",
         _ => ex.Message
     };
 
@@ -138,39 +138,24 @@ public sealed class UpdateChecker
 
     // ---- 解析与比较（纯函数，自检直接打这里） ----
 
-    /// <summary>从 releases/latest 的 JSON 里取 tag、页面地址和 setup 资产下载地址。</summary>
-    public static ReleaseInfo? ParseLatest(string json)
+    /// <summary>
+    /// 从 releases/latest 重定向后的地址里取 tag（…/releases/tag/v0.1.27）。
+    /// 安装器地址按 pack.cmd 的命名约定拼：LikeShot-<三段版本>-win-x64-setup.exe。
+    /// </summary>
+    public static ReleaseInfo? ParseLatestPage(Uri? finalUri)
     {
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            if (!root.TryGetProperty("tag_name", out var tagEl)) return null;
-            string tag = tagEl.GetString() ?? "";
-            var version = ParseVersion(tag);
-            if (version == null) return null;
+        if (finalUri == null) return null;
+        string path = finalUri.AbsolutePath;
+        const string marker = "/releases/tag/";
+        int tagAt = path.LastIndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (tagAt < 0) return null;
+        string tag = path[(tagAt + marker.Length)..].Trim('/');
+        var version = ParseVersion(tag);
+        if (version == null) return null;
 
-            string page = root.TryGetProperty("html_url", out var urlEl) ? urlEl.GetString() ?? "" : "";
-            if (page.Length == 0) page = $"{RepoUrl}/releases/tag/{tag}";
-
-            string? setupUrl = null, setupName = null;
-            if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var asset in assets.EnumerateArray())
-                {
-                    string name = asset.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
-                    if (!name.EndsWith("-setup.exe", StringComparison.OrdinalIgnoreCase)) continue;
-                    setupName = name;
-                    setupUrl = asset.TryGetProperty("browser_download_url", out var d) ? d.GetString() : null;
-                    break;
-                }
-            }
-            return new ReleaseInfo(version, tag, page, setupUrl, setupName);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
+        string setupName = $"LikeShot-{version.ToString(3)}-win-x64-setup.exe";
+        return new ReleaseInfo(version, tag, finalUri.ToString(),
+            $"{RepoUrl}/releases/download/{tag}/{setupName}", setupName);
     }
 
     /// <summary>「v0.1.26」「0.1.26+git_hash」都认；认不出给 null。</summary>
