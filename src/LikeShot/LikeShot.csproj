@@ -13,7 +13,7 @@
     <AssemblyName>LikeShot</AssemblyName>
     <RootNamespace>LikeShot</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Version>0.1.26</Version>
+    <Version>0.1.27</Version>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <Product>LikeShot 截图</Product>
     <AssemblyTitle>LikeShot 截图</AssemblyTitle>
