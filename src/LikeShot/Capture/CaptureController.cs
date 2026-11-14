@@ -93,6 +93,13 @@ public sealed class CaptureController
         }
         _overlays = [];
 
+        // 层关掉时鼠标多半正压在我们窗口上：Win32 的规矩是窗口被销毁时系统不主动
+        // 重算光标，截图层的十字就一直挂在屏幕上，要等下一次鼠标移动才恢复。
+        // 把光标原地推一下（挪到它现在就在的坐标），系统就会对现在压着的窗口
+        // 重新问一遍光标，当场变回箭头。
+        if (LikeShot.Native.Win32.GetCursorPos(out var cursor))
+            LikeShot.Native.Win32.SetCursorPos(cursor.X, cursor.Y);
+
         if (_session != null)
         {
             _session = null;
